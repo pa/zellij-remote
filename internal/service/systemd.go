@@ -9,15 +9,12 @@ import (
 	"strings"
 )
 
-// UnitPrefix starts every systemd unit name; the unit name follows it.
-const UnitPrefix = "zellij-remote-"
-
 // Systemd manages systemd --user units in Dir (~/.config/systemd/user).
 type Systemd struct{ Dir string }
 
 func (s *Systemd) Kind() string { return "systemd" }
 
-func unitName(name string) string { return UnitPrefix + name + ".service" }
+func unitName(name string) string { return name + ".service" }
 
 func (s *Systemd) Path(name string) string { return filepath.Join(s.Dir, unitName(name)) }
 
@@ -37,9 +34,6 @@ func pathValue(s string) string { return strings.ReplaceAll(s, "%", "%%") }
 func SystemdUnit(u Unit) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=%s\n", u.Desc)
-	if u.After != "" {
-		fmt.Fprintf(&b, "Wants=%s\nAfter=%s\n", unitName(u.After), unitName(u.After))
-	}
 	b.WriteString("\n[Service]\nType=simple\n")
 	args := make([]string, len(u.Args))
 	for i, a := range u.Args {

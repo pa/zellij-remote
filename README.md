@@ -18,9 +18,10 @@ your [Tailscale](https://tailscale.com) tailnet at
 or another laptop, log in with a zellij token, and you're in your sessions.
 
 ```
- phone / laptop ──Tailscale──▶ zellij-remote ──http──▶ zellij web
- (Tailscale app)               its own tailnet device,   127.0.0.1:8082
-                               HTTPS on :443 only
+ phone / laptop ══WireGuard══▶ zellij-remote ──loopback──▶ zellij web
+ (Tailscale app)   + HTTPS     its own tailnet device,      127.0.0.1:8082
+                               :443 only, allowlisted       (started and kept
+                               logins only                   running by zellij-remote)
 ```
 
 The machine running zellij doesn't need the Tailscale app. `zellij-remote`
@@ -33,9 +34,12 @@ and joins the tailnet as a device of its own.
 - **Real HTTPS.** TLS uses the device's `*.ts.net` certificate and ends
   inside `zellij-remote`. zellij itself stays on `127.0.0.1` over plain
   HTTP, where it needs no certificate.
-- **Runs in the background.** `zellij-remote start` runs zellij web and the
-  proxy at login and restarts them if they crash. On macOS that's launchd,
-  and on Linux it's systemd `--user`.
+- **Only you.** Every request is checked against the tailnet's own record
+  of who sent it. Logins not on your allowlist, and tagged devices, get a
+  403 before anything reaches zellij, even if your ACLs allow more.
+- **One program to run.** zellij-remote starts `zellij web` itself and
+  restarts it if it crashes. `zellij-remote start` runs the lot at login,
+  under launchd on macOS or systemd `--user` on Linux.
 - **Runs as you**, not root.
 
 Supported on macOS and Linux. Needs zellij 0.43 or newer (tested with
@@ -124,37 +128,39 @@ node key doesn't expire.
 ## 2. Set up the machine
 
 ```bash
-zellij-remote setup --name "my laptop"
+zellij-remote setup --name "my laptop" --allow you@example.com
+zellij-remote start
 ```
 
-Paste the auth key when asked (input is hidden), or set `TS_AUTHKEY`, or
-pipe the key in. Setup joins the tailnet, fetches the HTTPS certificate, and
-prints the URL. The key isn't saved. After the first join, the device's
-identity lives in `~/.zellij-remote/tailscale`, which is created with mode
-0700.
+That's all. `setup`:
 
-The name is part of the URL, so running setup again keeps the name the
-device already has. `--port` changes zellij web's local port from the
-default 8082.
+1. Asks for the auth key. Input is hidden; `TS_AUTHKEY` or a pipe works
+   too. The key is never saved, never logged, and never passed on a command
+   line.
+2. Joins the tailnet, fetches the HTTPS certificate, and prints the URL.
+3. Creates a zellij login token and prints it **once**. zellij keeps only a
+   hash of it, and zellij-remote doesn't keep it at all. Put it in your
+   password manager, then clear your terminal's scrollback.
 
-Create a login token for the web client:
+`--allow` takes your Tailscale login (comma-separate several). Only those
+people's own devices get through. Without it, setup asks.
+
+`start` installs one background service that runs at login and restarts on
+a crash. It starts `zellij web` on 127.0.0.1 itself. If you already run a
+`zellij web` on that port, zellij-remote uses yours, but won't restart it if
+it stops; `zellij web --stop` before `start` hands it over.
 
 ```bash
-zellij web --create-token             # full access, shown once
-zellij web --create-read-only-token   # can only watch existing sessions
+zellij-remote status              # running?, URL, allowlist, last log lines
+zellij-remote stop                # stop, and remove from login
+zellij-remote token               # another login token
+zellij-remote token --read-only   # a token that can only watch sessions
 ```
 
-Then start both programs in the background:
-
-```bash
-zellij-remote start     # zellij web + the proxy, at login, restarted on crash
-zellij-remote status    # are they running, the URL, the last log lines
-zellij-remote stop      # stop both and remove them from login
-```
-
-If you already run `zellij web` yourself, stop it first (`zellij web
---stop`). `start` runs its own copy in the foreground under launchd or
-systemd, so a crash gets restarted.
+The device name is part of the URL, so running setup again keeps the name
+it already has. Running it again with `--allow` changes the allowlist
+(restart with `zellij-remote start` to apply). `--port` moves zellij web
+off the default 8082.
 
 **Linux:** systemd stops user services when your last session ends, SSH
 sessions included. To keep zellij-remote running after you log out, turn on
@@ -164,9 +170,8 @@ lingering once:
 loginctl enable-linger $USER
 ```
 
-To run it under a supervisor of your own instead, use
-`zellij-remote run`, which serves in the foreground. It expects zellij web
-to already be listening on `127.0.0.1:<port>`.
+To run it under a supervisor of your own instead, use `zellij-remote run`,
+which does the same in the foreground.
 
 ## 3. Open it
 
@@ -175,61 +180,105 @@ On your phone or another computer:
 1. Install the Tailscale app and sign in to the same tailnet **as
    yourself**. Don't use the auth key from 1c, and don't tag the device:
    a tagged device no longer counts as you, and the grant won't let it in.
-2. Open the URL that `setup` printed, and paste a login token.
+2. Open the URL that `setup` printed, and paste the login token.
 
 `/` shows your sessions. `/<name>` attaches to a session, or creates it if
 it doesn't exist yet.
 
-## Security notes
+## Security
 
-- **A zellij login token is a shell on this machine.** Anyone holding a
-  regular token can run commands as you, and can open new sessions by
-  visiting `/<any-name>`. Keep tokens like passwords, give watch-only
-  devices a `--create-read-only-token` token instead, and revoke tokens you
-  no longer use:
+### What's encrypted
+
+| Hop | Protection |
+|---|---|
+| your device → this machine | WireGuard (Tailscale), and inside it HTTPS with the device's `*.ts.net` certificate. TLS ends inside the zellij-remote process; Tailscale's servers never see plaintext. |
+| zellij-remote → zellij web | plain HTTP over loopback (`127.0.0.1`). It never leaves the machine. |
+
+The zellij token doesn't encrypt anything. It's a login credential:
+zellij exchanges it for a session cookie, and the encryption above
+protects both.
+
+### Who gets in
+
+A request has to pass all of these, in order:
+
+1. **Tailscale ACLs:** your device must be on the tailnet and allowed to
+   reach `tag:zellij` on 443.
+2. **The allowlist:** zellij-remote asks the tailnet who is connecting
+   (from its own coordination data, not anything the client sends). It
+   refuses logins not on `--allow` and tagged devices. This holds even if
+   your ACL is the default allow-all.
+3. **The Origin check:** a request whose `Origin` isn't zellij-remote's own
+   URL gets a 403. zellij 0.45 doesn't check `Origin` on its WebSockets,
+   and its `SameSite=Strict` cookie counts every `*.<tailnet>.ts.net`
+   host as the same site. Without this check, a page served by another
+   device on your tailnet could open a terminal using your logged-in
+   browser.
+4. **A zellij login token.** Then zellij's session cookie, which
+   zellij-remote marks `Secure`, with HSTS on every response.
+
+Refusals, login attempts, and every terminal opened (who, from where) go to
+`~/.zellij-remote/zellij-remote.log`, which is mode 0600. Headers, cookies,
+tokens and query strings are never logged.
+
+### Handling tokens
+
+- **A full token is a shell on this machine.** Whoever holds one can run
+  commands as you, and visiting `/<any-name>` creates a new session. Keep
+  tokens in a password manager. Give a device that only needs to watch a
+  `zellij-remote token --read-only` token.
+- Tokens are printed once and stored nowhere by zellij-remote; zellij
+  stores only a hash. Revoke ones you no longer need:
   ```bash
   zellij web --list-tokens
   zellij web --revoke-token <name>      # or --revoke-all-tokens
   ```
-- **Two locks on the door.** To reach the login page, a device must be on
-  your tailnet and allowed by your ACL grant. To get a shell, it then needs
-  a zellij token.
-- **Cross-origin requests are refused.** zellij 0.45 doesn't check the
-  `Origin` header on its WebSockets. Its session cookie is
-  `SameSite=Strict`, but every `*.<tailnet>.ts.net` host counts as the
-  same site. Without a check, a web page served by any other device on your
-  tailnet could open a terminal using your logged-in browser. So
-  `zellij-remote` rejects (403) any request whose `Origin` isn't its own
-  URL.
+- On a shared machine, other local users can reach `127.0.0.1:8082`
+  directly, skipping the allowlist (they'd still need a token). zellij web
+  can't listen on a unix socket, so use zellij-remote on single-user
+  machines.
+
+### Keeping it private
+
 - **Not on the public internet.** Don't put this behind
   [Funnel](https://tailscale.com/kb/1223/funnel). zellij's login has no
   rate limiting.
-- **Cutting it off.** To remove the device right away, delete it under
-  **Machines** in the admin console. To start over, run
-  `zellij-remote stop`, delete `~/.zellij-remote/tailscale`, generate a new
-  key, and run setup again.
+- **Cut it off** by removing the device under **Machines** in the admin
+  console. To start over, run `zellij-remote stop`, delete
+  `~/.zellij-remote/tailscale`, generate a new key, and run setup again.
 - [Tailnet Lock](https://tailscale.com/kb/1226/tailnet-lock) requires every
   new device to be signed by one of your trusted devices before it can
   join. That stops Tailscale's coordination server from adding a device on
   its own.
+- The device name and your tailnet's name are public through Certificate
+  Transparency logs (see 1a).
 
 ## Files
 
 | Path | What |
 |---|---|
-| `~/.zellij-remote/config.json` | name, device name, URL, zellij web's port |
-| `~/.zellij-remote/tailscale/` | the device's tailnet identity (0700) |
-| `~/.zellij-remote/web.log`, `proxy.log` | logs of the two background programs |
-| `~/Library/LaunchAgents/com.github.pa.zellij-remote.{web,proxy}.plist` | macOS |
-| `~/.config/systemd/user/zellij-remote-{web,proxy}.service` | Linux |
+| `~/.zellij-remote/` | all state, mode 0700 |
+| `~/.zellij-remote/config.json` | name, device name, URL, port, allowlist (0600) |
+| `~/.zellij-remote/tailscale/` | the device's tailnet identity, its private key included |
+| `~/.zellij-remote/zellij-remote.log` | the service's log, zellij web's output included (0600) |
+| `~/Library/LaunchAgents/com.github.pa.zellij-remote.plist` | macOS |
+| `~/.config/systemd/user/zellij-remote.service` | Linux |
+
+No tokens or keys are stored anywhere in it.
 
 `ZELLIJ_REMOTE_HOME` moves `~/.zellij-remote` elsewhere.
 
 ## Development
 
 ```bash
+git config core.hooksPath .githooks   # once: scan every commit for secrets
 go test ./...
 ```
+
+`scripts/check-secrets.sh` refuses commits that contain anything shaped
+like a Tailscale key, a zellij token or session cookie, or a private key.
+CI runs it over the whole history. A test that needs a token-shaped string
+uses `00000000-0000-4000-8000-000000000000`.
 
 One test drives a real zellij web through the proxy: it logs in, opens a
 session, checks that a cross-origin WebSocket is refused, and reads
@@ -238,9 +287,10 @@ zellij web and give it a token:
 
 ```bash
 zellij web --port 18082 &
-zellij web --create-token
+zellij web --create-token        # note the token's name, revoke it after
 ZELLIJ_IT_URL=http://127.0.0.1:18082 ZELLIJ_IT_TOKEN=<token> \
   go test ./internal/proxy -run RealZellij -v
+zellij web --revoke-token <name>
 ```
 
 ## License

@@ -9,6 +9,15 @@ permissions:
   contents: read
 
 jobs:
+  secrets:
+    # No token, auth key or tailnet key may ever be in the history.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: scripts/check-secrets.sh --history
+
   test:
     strategy:
       matrix:

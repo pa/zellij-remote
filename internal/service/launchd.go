@@ -14,7 +14,7 @@ import (
 )
 
 // LabelPrefix starts every launchd label; the unit name follows it.
-const LabelPrefix = "com.github.pa.zellij-remote."
+const LabelPrefix = "com.github.pa."
 
 // Launchd manages per-user launchd agents in Dir (~/Library/LaunchAgents).
 type Launchd struct{ Dir string }

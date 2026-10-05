@@ -30,7 +30,8 @@ func TestRealZellij(t *testing.T) {
 	const host = "zellij-it.example.ts.net"
 	const self = "https://" + host
 	target, _ := url.Parse(upURL)
-	px := httptest.NewTLSServer(New(target, self, nil))
+	px := httptest.NewTLSServer(New(Config{Target: target, Origin: self,
+		Authorize: func(*http.Request) (string, error) { return "it@example.com", nil }}))
 	defer px.Close()
 	addr := strings.TrimPrefix(px.URL, "https://")
 

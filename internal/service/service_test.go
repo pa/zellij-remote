@@ -6,7 +6,7 @@ import (
 )
 
 var unit = Unit{
-	Name: "web", Desc: "zellij web",
+	Name: "zellij-remote", Desc: "zellij-remote",
 	Args: []string{"/opt/my tools/zellij", "web", "--port", "8082"},
 	Env:  [][2]string{{"PATH", "/usr/bin:/a&b"}, {"SHELL", "/bin/zsh"}, {"WEIRD", `50% "$HOME" \x`}},
 	Log:  "/home/me/.zellij-remote/web.log",
@@ -19,7 +19,7 @@ func TestPlist(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		"<string>com.github.pa.zellij-remote.web</string>",
+		"<string>com.github.pa.zellij-remote</string>",
 		"<string>/opt/my tools/zellij</string><string>web</string><string>--port</string><string>8082</string>",
 		"<key>PATH</key><string>/usr/bin:/a&amp;b</string>",
 		"<key>WEIRD</key><string>50% &#34;$HOME&#34; \\x</string>",
@@ -33,11 +33,9 @@ func TestPlist(t *testing.T) {
 }
 
 func TestSystemdUnit(t *testing.T) {
-	u := unit
-	u.Name, u.After = "proxy", "web"
-	s := string(SystemdUnit(u))
+	s := string(SystemdUnit(unit))
 	for _, want := range []string{
-		"Wants=zellij-remote-web.service\nAfter=zellij-remote-web.service\n",
+		"[Unit]\nDescription=zellij-remote\n",
 		`ExecStart="/opt/my tools/zellij" "web" "--port" "8082"` + "\n",
 		`Environment="PATH=/usr/bin:/a&b"` + "\n",
 		`Environment="WEIRD=50%% \"$$HOME\" \\x"` + "\n",

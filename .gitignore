@@ -1,4 +1,35 @@
+# Build output
 /bin/
 /dist/
-*.tmp
+/zellij-remote
+
+# zellij-remote's state never belongs in the repo: the tailnet identity
+# (tailscaled.state is the device's private key), config, logs, pid files.
+.zellij-remote/
+tailscale/
+tailscaled.state*
+*.state
+*.log
+*.pid
+*.lock
+
+# Secrets of any kind: tokens, auth keys, certificates, env files.
+*.token
+*token*.txt
+*.key
+*.pem
+*.crt
+*.p12
+.env
+.env.*
+*.secret
+*.secrets
+cookies.txt
+cookiejar*
+
+# Editors and OS
 .DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp

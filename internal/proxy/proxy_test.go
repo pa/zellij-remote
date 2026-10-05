@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -38,10 +39,16 @@ func upstream(t *testing.T) *httptest.Server {
 	}))
 }
 
+func allowAll(*http.Request) (string, error) { return "me@example.com", nil }
+
+func cfg(target string) Config {
+	u, _ := url.Parse(target)
+	return Config{Target: u, Origin: origin, Authorize: allowAll}
+}
+
 func newProxy(t *testing.T, up *httptest.Server) *httptest.Server {
 	t.Helper()
-	u, _ := url.Parse(up.URL)
-	return httptest.NewTLSServer(New(u, origin, nil))
+	return httptest.NewTLSServer(New(cfg(up.URL)))
 }
 
 func TestForwardsAndKeepsHost(t *testing.T) {
@@ -69,8 +76,11 @@ func TestForwardsAndKeepsHost(t *testing.T) {
 	if strings.Contains(got[3], "6.6.6.6") || got[3] != "127.0.0.1" {
 		t.Errorf("X-Forwarded-For = %q, want only this hop", got[3])
 	}
-	if c := res.Header.Get("Set-Cookie"); !strings.HasPrefix(c, "session_token=abc") {
-		t.Errorf("Set-Cookie not passed through: %q", c)
+	if c := res.Header.Get("Set-Cookie"); c != "session_token=abc; HttpOnly; SameSite=Strict; Path=/; Secure" {
+		t.Errorf("Set-Cookie = %q, want zellij's plus Secure", c)
+	}
+	if h := res.Header.Get("Strict-Transport-Security"); h == "" {
+		t.Error("no HSTS header")
 	}
 }
 
@@ -108,8 +118,7 @@ func TestOriginCheck(t *testing.T) {
 func TestWebSocketPassesThrough(t *testing.T) {
 	up := upstream(t)
 	defer up.Close()
-	u, _ := url.Parse(up.URL)
-	px := httptest.NewServer(New(u, origin, nil)) // plain: easier to speak raw HTTP to
+	px := httptest.NewServer(New(cfg(up.URL))) // plain: easier to speak raw HTTP to
 	defer px.Close()
 
 	conn, err := net.Dial("tcp", strings.TrimPrefix(px.URL, "http://"))
@@ -137,8 +146,7 @@ func TestWebSocketPassesThrough(t *testing.T) {
 }
 
 func TestUpstreamDown(t *testing.T) {
-	u, _ := url.Parse("http://127.0.0.1:1")
-	px := httptest.NewServer(New(u, origin, nil))
+	px := httptest.NewServer(New(cfg("http://127.0.0.1:1")))
 	defer px.Close()
 	res, err := http.Get(px.URL)
 	if err != nil {
@@ -147,5 +155,47 @@ func TestUpstreamDown(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != http.StatusBadGateway {
 		t.Errorf("status %d, want 502", res.StatusCode)
+	}
+}
+
+func TestAuthorize(t *testing.T) {
+	up := upstream(t)
+	defer up.Close()
+	var reached bool
+	inner := up.Config.Handler
+	up.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true; inner.ServeHTTP(w, r) })
+
+	c := cfg(up.URL)
+	c.Authorize = func(*http.Request) (string, error) { return "", errors.New("not on the allowlist") }
+	px := httptest.NewServer(New(c))
+	defer px.Close()
+	res, err := http.Get(px.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden || reached {
+		t.Errorf("status %d, reached zellij %v; want 403 and never reaching it", res.StatusCode, reached)
+	}
+
+	c.Authorize = nil // fail closed
+	px2 := httptest.NewServer(New(c))
+	defer px2.Close()
+	res, _ = http.Get(px2.URL + "/")
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("nil Authorize: status %d, want 403", res.StatusCode)
+	}
+}
+
+func TestSecureCookie(t *testing.T) {
+	for in, want := range map[string]string{
+		"a=b; Path=/":         "a=b; Path=/; Secure",
+		"a=b; Secure; Path=/": "a=b; Secure; Path=/",
+		"a=b;secure":          "a=b;secure",
+	} {
+		if got := secureCookie(in); got != want {
+			t.Errorf("secureCookie(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -1,6 +1,6 @@
-// Package service runs zellij web and the proxy in the background under
-// the platform's per-user service manager: launchd agents on macOS,
-// systemd --user units on Linux. Both start at login and restart on a crash.
+// Package service runs zellij-remote in the background under the
+// platform's per-user service manager: a launchd agent on macOS, a systemd
+// --user unit on Linux. It starts at login and restarts on a crash.
 package service
 
 import (
@@ -14,14 +14,11 @@ import (
 
 // Unit is one background program.
 type Unit struct {
-	Name string   // short name: "web" or "proxy"
+	Name string   // "zellij-remote"; the launchd label and systemd unit derive from it
 	Desc string   // one line, for systemd's Description
 	Args []string // absolute program path first
 	Env  [][2]string
 	Log  string // stdout and stderr both go here
-	// After names a unit to start before this one (systemd only; launchd
-	// has no ordering, and the proxy copes with zellij not being up yet).
-	After string
 }
 
 // State is what the service manager says about a unit.

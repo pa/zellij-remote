@@ -112,6 +112,57 @@ func (t *Tailscale) Listen(ctx context.Context) (net.Listener, string, error) {
 	return ln, "https://" + domains[0], nil
 }
 
+// Peer is who is on the other end of a tailnet connection.
+type Peer struct {
+	Login  string // the user's Tailscale login, like you@example.com
+	Tagged bool   // a tagged device: it belongs to the tailnet, not a person
+}
+
+// WhoIs asks the tailnet who is at remoteAddr (an "ip:port" from a
+// connection on the listener Listen returned). The answer comes from the
+// tailnet's own coordination data, not from anything the client sent.
+func (t *Tailscale) WhoIs(ctx context.Context, remoteAddr string) (Peer, error) {
+	if t.srv == nil {
+		return Peer{}, errors.New("not listening")
+	}
+	lc, err := t.srv.LocalClient()
+	if err != nil {
+		return Peer{}, err
+	}
+	who, err := lc.WhoIs(ctx, remoteAddr)
+	if err != nil {
+		return Peer{}, err
+	}
+	var p Peer
+	if who.Node != nil {
+		p.Tagged = who.Node.IsTagged()
+	}
+	if who.UserProfile != nil {
+		p.Login = who.UserProfile.LoginName
+	}
+	return p, nil
+}
+
+// Allowlist decides who may connect: untagged devices whose user's login
+// is on the list. Logins compare case-insensitively.
+type Allowlist []string
+
+// Check returns nil if p may connect.
+func (a Allowlist) Check(p Peer) error {
+	if p.Tagged {
+		return errors.New("tagged devices aren't allowed, only people's own devices")
+	}
+	if p.Login == "" {
+		return errors.New("the tailnet didn't say who this is")
+	}
+	for _, l := range a {
+		if strings.EqualFold(strings.TrimSpace(l), p.Login) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s isn't on the allowlist", p.Login)
+}
+
 func (t *Tailscale) Close() error {
 	if t.srv == nil {
 		return nil

@@ -32,3 +32,24 @@ func TestJoined(t *testing.T) {
 		t.Fatal("dir with state doesn't count as joined")
 	}
 }
+
+func TestAllowlist(t *testing.T) {
+	a := Allowlist{"Me@Example.com", " other@example.com "}
+	for _, tc := range []struct {
+		p  Peer
+		ok bool
+	}{
+		{Peer{Login: "me@example.com"}, true},
+		{Peer{Login: "other@example.com"}, true},
+		{Peer{Login: "stranger@example.com"}, false},
+		{Peer{Login: "me@example.com", Tagged: true}, false},
+		{Peer{Login: ""}, false},
+	} {
+		if err := a.Check(tc.p); (err == nil) != tc.ok {
+			t.Errorf("Check(%+v) = %v, want ok=%v", tc.p, err, tc.ok)
+		}
+	}
+	if (Allowlist{}).Check(Peer{Login: "me@example.com"}) == nil {
+		t.Error("an empty allowlist must refuse everyone")
+	}
+}

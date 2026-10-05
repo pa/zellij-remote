@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -11,12 +12,12 @@ func TestConfigRoundTrip(t *testing.T) {
 	if _, err := loadConfig(); err == nil {
 		t.Fatal("loadConfig before setup should fail")
 	}
-	want := config{Name: "mac", Hostname: "zellij-mac", URL: "https://zellij-mac.x.ts.net", Port: 9000}
+	want := config{Name: "mac", Hostname: "zellij-mac", URL: "https://zellij-mac.x.ts.net", Port: 9000, Allow: []string{"me@example.com"}}
 	if err := writeConfig(want); err != nil {
 		t.Fatal(err)
 	}
 	got, err := loadConfig()
-	if err != nil || got != want {
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	fi, _ := os.Stat(configPath())
@@ -61,5 +62,30 @@ func TestTail(t *testing.T) {
 	}
 	if tail(filepath.Join(t.TempDir(), "missing"), 3) != nil {
 		t.Fatal("missing file should give nil")
+	}
+}
+
+func TestSplitLogins(t *testing.T) {
+	got := splitLogins(" Me@Example.com, you@example.com\n")
+	if !reflect.DeepEqual(got, []string{"me@example.com", "you@example.com"}) {
+		t.Fatalf("got %q", got)
+	}
+	if splitLogins(" , ") != nil {
+		t.Fatal("blank input should give no logins")
+	}
+}
+
+func TestParseToken(t *testing.T) {
+	for out, want := range map[string][2]string{
+		"Created token successfully\n\ntoken_1: 00000000-0000-4000-8000-000000000000\n":             {"token_1", "00000000-0000-4000-8000-000000000000"},
+		"Created token successfully\n\ntoken_7: 00000000-0000-4000-8000-000000000000 (read-only)\n": {"token_7", "00000000-0000-4000-8000-000000000000"},
+	} {
+		n, tok, ok := parseToken(out)
+		if !ok || n != want[0] || tok != want[1] {
+			t.Errorf("parseToken(%q) = %q, %q, %v", out, n, tok, ok)
+		}
+	}
+	if _, _, ok := parseToken("error: something went wrong"); ok {
+		t.Error("parsed a token out of an error")
 	}
 }

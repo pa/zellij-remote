@@ -1,15 +1,16 @@
 // Command zellij-remote serves zellij's web client to your tailnet, and
 // nothing else on this machine.
 //
-//	zellij-remote setup [--name <n>] [--port <p>]   join the tailnet once
+//	zellij-remote setup [--name <n>] [--port <p>]   join the tailnet once, make a login token
 //	zellij-remote run                               serve in the foreground
-//	zellij-remote start | stop | status             run zellij web and the proxy
-//	                                                in the background (launchd on
+//	zellij-remote start | stop | status             run in the background (launchd on
 //	                                                macOS, systemd --user on Linux)
+//	zellij-remote token [--read-only]               make another login token
 //
 // It embeds tsnet, joins the tailnet as its own device (zellij-<name>,
 // tagged tag:zellij), listens on :443 with the device's *.ts.net
-// certificate, and reverse-proxies to zellij web on 127.0.0.1.
+// certificate, and reverse-proxies to zellij web on 127.0.0.1, which it
+// starts and keeps running itself.
 package main
 
 import (
@@ -28,6 +29,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -38,6 +40,7 @@ import (
 
 	"github.com/pa/zellij-remote/internal/proxy"
 	"github.com/pa/zellij-remote/internal/service"
+	"github.com/pa/zellij-remote/internal/supervise"
 	"github.com/pa/zellij-remote/internal/tunnel"
 )
 
@@ -49,10 +52,12 @@ const defaultPort = 8082
 const usage = `zellij-remote serves zellij's web client to your tailnet, and nothing else.
 
 usage:
-  zellij-remote setup [--name <n>] [--port <p>]  join the tailnet (once) and print the URL
-  zellij-remote run                              serve in the foreground
-  zellij-remote start | stop | status            run zellij web and the proxy in the
-                                                 background (at login, restarted on crash)
+  zellij-remote setup [--name <n>] [--port <p>]  join the tailnet (once), print the URL
+                                                 and a login token
+  zellij-remote run                              serve in the foreground (starts zellij web)
+  zellij-remote start | stop | status            run in the background (at login,
+                                                 restarted on crash)
+  zellij-remote token [--read-only]              make another login token
   zellij-remote version
 
 Setup reads the Tailscale auth key from TS_AUTHKEY, or asks for it.
@@ -77,6 +82,8 @@ func main() {
 		err = cmdStop()
 	case "status":
 		err = cmdStatus()
+	case "token":
+		err = cmdToken(args)
 	case "version", "--version", "-v":
 		fmt.Println("zellij-remote", version)
 	case "help", "--help", "-h":
@@ -108,6 +115,9 @@ type config struct {
 	Hostname string `json:"hostname"` // its tailnet device name
 	URL      string `json:"url"`      // https://<hostname>.<tailnet>.ts.net
 	Port     int    `json:"port"`     // zellij web's local port
+	// Allow lists the Tailscale logins that may connect. Empty refuses
+	// everyone: run won't start without at least one.
+	Allow []string `json:"allow"`
 }
 
 func configPath() string { return filepath.Join(home(), "config.json") }
@@ -148,15 +158,36 @@ func cmdSetup(args []string) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	name := fs.String("name", "", "this machine's name on the tailnet (default: its host name)")
 	port := fs.Int("port", defaultPort, "the local port zellij web listens on")
+	allowFlag := fs.String("allow", "", "Tailscale logins that may connect, comma-separated (you@example.com)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	allow := splitLogins(*allowFlag)
+	if len(allow) == 0 {
+		if prev, err := loadConfig(); err == nil {
+			allow = prev.Allow
+		}
+	}
+	if len(allow) == 0 {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return errors.New("say who may connect: --allow you@example.com (your Tailscale login)")
+		}
+		fmt.Print("Your Tailscale login (who may connect; comma-separate several): ")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		if allow = splitLogins(line); len(allow) == 0 {
+			return errors.New("at least one login is needed")
+		}
 	}
 	if _, err := exec.LookPath("zellij"); err != nil {
 		return errors.New("zellij isn't on PATH; install zellij 0.43 or newer first (https://zellij.dev)")
 	}
 	display, host := tailnetName(*name)
 	ts := &tunnel.Tailscale{Dir: tailscaleDir(), Hostname: host, Logf: func(f string, a ...any) { fmt.Printf(f+"\n", a...) }}
-	if !tunnel.Joined(ts.Dir) {
+	firstJoin := !tunnel.Joined(ts.Dir)
+	if firstJoin {
 		key, err := authKey(host)
 		if err != nil {
 			return err
@@ -168,19 +199,87 @@ func cmdSetup(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeConfig(config{Name: display, Hostname: host, URL: u, Port: *port}); err != nil {
+	if err := writeConfig(config{Name: display, Hostname: host, URL: u, Port: *port, Allow: allow}); err != nil {
 		return err
 	}
-	fmt.Printf(`
-joined. Other devices on your tailnet will reach zellij at
-    %s
-
-Next:
-  1. zellij web --create-token       a login token for the web client (shown once)
-     zellij web --create-read-only-token   for a device that should only watch
-  2. zellij-remote start             run zellij web and the proxy in the background
-`, u)
+	fmt.Printf("\njoined. Other devices on your tailnet will reach zellij at\n    %s\n", u)
+	fmt.Printf("Only these Tailscale logins get through: %s\n", strings.Join(allow, ", "))
+	// One login token on the first join, so the URL is usable right away.
+	// Running setup again doesn't pile up more; `zellij-remote token` does.
+	if firstJoin {
+		fmt.Println()
+		if err := printToken(false); err != nil {
+			fmt.Printf("couldn't create a login token (%v); run `zellij-remote token` to try again\n", err)
+		}
+	}
+	fmt.Println("\nNext: zellij-remote start     (runs at login, restarts if it crashes)")
 	return nil
+}
+
+// ---- token ----
+
+func cmdToken(args []string) error {
+	fs := flag.NewFlagSet("token", flag.ContinueOnError)
+	ro := fs.Bool("read-only", false, "the token can only watch existing sessions")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return printToken(*ro)
+}
+
+func printToken(readOnly bool) error {
+	name, tok, err := createToken(readOnly)
+	if err != nil {
+		return err
+	}
+	kind := "login token"
+	if readOnly {
+		kind = "read-only login token (can watch sessions, not type in them)"
+	}
+	fmt.Printf(`%s %q, shown only this once:
+    %s
+Anyone with it gets a shell on this machine. List or revoke tokens with
+    zellij web --list-tokens
+    zellij web --revoke-token %s
+`, kind, name, tok, name)
+	return nil
+}
+
+// createToken asks zellij for a new web login token. zellij prints it as
+// "<name>: <token>" (plus " (read-only)"), once; it keeps only a hash.
+func createToken(readOnly bool) (name, token string, err error) {
+	arg := "--create-token"
+	if readOnly {
+		arg = "--create-read-only-token"
+	}
+	out, err := exec.Command("zellij", "web", arg).CombinedOutput()
+	if err != nil {
+		return "", "", fmt.Errorf("zellij web %s: %v: %s", arg, err, strings.TrimSpace(string(out)))
+	}
+	if name, token, ok := parseToken(string(out)); ok {
+		return name, token, nil
+	}
+	return "", "", fmt.Errorf("unexpected output from zellij web %s", arg)
+}
+
+var tokenLine = regexp.MustCompile(`^(\S+): ([0-9a-fA-F]{8}-[0-9a-fA-F-]{27,})( \(read-only\))?$`)
+
+func parseToken(out string) (name, token string, ok bool) {
+	for _, line := range strings.Split(out, "\n") {
+		if m := tokenLine.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			return m[1], m[2], true
+		}
+	}
+	return "", "", false
+}
+
+// splitLogins parses a comma- or space-separated list of logins.
+func splitLogins(s string) []string {
+	var out []string
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
+		out = append(out, strings.ToLower(f))
+	}
+	return out
 }
 
 // tailnetName returns the machine's display name (the host name when name
@@ -284,10 +383,16 @@ Copy the key (tskey-auth-...). It's shown once.`},
 
 // ---- run ----
 
+// cmdRun serves in the foreground. It starts zellij web on 127.0.0.1 and
+// restarts it if it exits, unless a zellij web is already listening on the
+// port, which it then uses as is. On SIGINT/SIGTERM it stops both.
 func cmdRun() error {
 	c, err := loadConfig()
 	if err != nil {
 		return err
+	}
+	if len(c.Allow) == 0 {
+		return errors.New("nobody is allowed to connect yet; run `zellij-remote setup --allow you@example.com`")
 	}
 	release, err := lockRun()
 	if err != nil {
@@ -298,9 +403,37 @@ func cmdRun() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port))}
+	webDone := make(chan struct{})
+	// A zellij web left over from a run that was killed outright still
+	// holds the port; stop it so this run supervises a fresh one.
+	if supervise.StopStale(webPIDPath(), "zellij", 5*time.Second) {
+		log.Print("stopped a zellij web left over from an earlier run")
+	}
+	if zellijUp(c.Port) {
+		log.Printf("zellij web is already running on %s; using it as is", target.Host)
+		close(webDone)
+	} else {
+		zj, err := exec.LookPath("zellij")
+		if err != nil {
+			return errors.New("zellij isn't on PATH")
+		}
+		child := &supervise.Child{
+			Args:    []string{zj, "web", "--ip", "127.0.0.1", "--port", strconv.Itoa(c.Port)},
+			Stdout:  os.Stdout,
+			Stderr:  os.Stderr,
+			PIDFile: webPIDPath(),
+			Logf:    log.Printf,
+		}
+		log.Printf("starting zellij web on %s", target.Host)
+		go func() { child.Run(ctx); close(webDone) }()
+	}
+
 	ts := &tunnel.Tailscale{Dir: tailscaleDir(), Hostname: c.Hostname, Logf: log.Printf}
 	ln, u, err := ts.Listen(ctx)
 	if err != nil {
+		stop()
+		<-webDone
 		return err
 	}
 	defer ts.Close()
@@ -310,12 +443,20 @@ func cmdRun() error {
 		writeConfig(c)
 	}
 
-	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(c.Port))}
-	if !zellijUp(c.Port) {
-		log.Printf("zellij web isn't answering on %s yet; requests get a 502 until it is", target.Host)
-	}
 	srv := &http.Server{
-		Handler:           proxy.New(target, u, log.Default()),
+		Handler: proxy.New(proxy.Config{
+			Target: target, Origin: u, Logger: log.Default(),
+			Authorize: func(r *http.Request) (string, error) {
+				p, err := ts.WhoIs(r.Context(), r.RemoteAddr)
+				if err != nil {
+					return "", fmt.Errorf("who is this? %w", err)
+				}
+				if err := tunnel.Allowlist(c.Allow).Check(p); err != nil {
+					return p.Login, err
+				}
+				return p.Login, nil
+			},
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -324,13 +465,18 @@ func cmdRun() error {
 		defer cancel()
 		srv.Shutdown(sctx)
 	}()
-	log.Printf("serving %s -> %s", u, target)
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	log.Printf("serving %s -> %s, for %s", u, target, strings.Join(c.Allow, ", "))
+	err = srv.Serve(ln)
+	stop()
+	<-webDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	log.Print("stopped")
 	return nil
 }
+
+func webPIDPath() string { return filepath.Join(home(), "zellij-web.pid") }
 
 // zellijUp reports whether something answers HTTP on zellij web's port.
 func zellijUp(port int) bool {
@@ -343,19 +489,19 @@ func zellijUp(port int) bool {
 	return true
 }
 
-// lockRun makes sure only one proxy runs at a time; two would fight over
-// the same tailnet identity.
+// lockRun makes sure only one zellij-remote serves at a time; two would
+// fight over the same tailnet identity and zellij web's port.
 func lockRun() (release func(), err error) {
 	if err := os.MkdirAll(home(), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(home(), "proxy.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(filepath.Join(home(), "run.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return nil, errors.New("another zellij-remote proxy is already running (check `zellij-remote status`)")
+		return nil, errors.New("zellij-remote is already running (check `zellij-remote status`)")
 	}
 	f.Truncate(0)
 	fmt.Fprintf(f, "%d\n", os.Getpid())
@@ -364,45 +510,33 @@ func lockRun() (release func(), err error) {
 
 // ---- start / stop / status ----
 
-func logPath(name string) string { return filepath.Join(home(), name+".log") }
+const unitName = "zellij-remote"
 
-// units describes the two background programs: zellij web in the
-// foreground (so the service manager supervises it, rather than
-// --daemonize), and this binary's `run`.
-func units(c config) ([]service.Unit, error) {
+func logPath() string { return filepath.Join(home(), "zellij-remote.log") }
+
+// unit describes zellij-remote as a background service: `zellij-remote run`,
+// which starts zellij web itself.
+func unit() (service.Unit, error) {
 	bin, err := service.Executable()
 	if err != nil {
-		return nil, err
+		return service.Unit{}, err
 	}
-	zj, err := exec.LookPath("zellij")
-	if err != nil {
-		return nil, errors.New("zellij isn't on PATH")
-	}
-	if zj, err = filepath.Abs(zj); err != nil {
-		return nil, err
+	if _, err := exec.LookPath("zellij"); err != nil {
+		return service.Unit{}, errors.New("zellij isn't on PATH")
 	}
 	// Service managers start programs with a bare environment. Keep what
 	// zellij needs to find its config, start the right shell, and speak
-	// UTF-8, plus this shell's PATH so the shells it starts find things.
-	var env [][2]string
+	// UTF-8, plus this shell's PATH so zellij and the shells it starts
+	// find things.
+	env := [][2]string{{"ZELLIJ_REMOTE_HOME", home()}}
 	for _, k := range []string{"PATH", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "ZELLIJ_CONFIG_DIR", "ZELLIJ_CONFIG_FILE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"} {
 		if v, ok := os.LookupEnv(k); ok && v != "" {
 			env = append(env, [2]string{k, v})
 		}
 	}
-	return []service.Unit{
-		{
-			Name: "web", Desc: "zellij web, for zellij-remote",
-			Args: []string{zj, "web", "--ip", "127.0.0.1", "--port", strconv.Itoa(c.Port)},
-			Env:  env, Log: logPath("web"),
-		},
-		{
-			Name: "proxy", Desc: "zellij-remote: zellij web over Tailscale",
-			Args:  []string{bin, "run"},
-			Env:   [][2]string{{"PATH", os.Getenv("PATH")}, {"ZELLIJ_REMOTE_HOME", home()}},
-			Log:   logPath("proxy"),
-			After: "web",
-		},
+	return service.Unit{
+		Name: unitName, Desc: "zellij-remote: zellij web over Tailscale",
+		Args: []string{bin, "run"}, Env: env, Log: logPath(),
 	}, nil
 }
 
@@ -418,23 +552,30 @@ func cmdStart() error {
 	if err != nil {
 		return err
 	}
-	// A zellij web that isn't ours (say, `zellij web --daemonize`) would keep
-	// ours from binding the port, and it would restart forever.
-	if zellijUp(c.Port) && !m.State("web").Running {
-		return fmt.Errorf("something already answers on 127.0.0.1:%d, probably a zellij web you started; stop it with `zellij web --stop` (or set another --port in setup) and try again", c.Port)
-	}
-	us, err := units(c)
+	external := zellijUp(c.Port) && !m.State(unitName).Running
+	u, err := unit()
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(home(), 0o700); err != nil {
 		return err
 	}
-	if err := m.Install(us); err != nil {
+	// Create the log ourselves so it's 0600; launchd and systemd would
+	// create it world-readable. It holds no secrets, but who connected when
+	// is nobody else's business.
+	if f, err := os.OpenFile(logPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+		f.Close()
+		os.Chmod(logPath(), 0o600)
+	}
+	if err := m.Install([]service.Unit{u}); err != nil {
 		return err
 	}
-	fmt.Printf("started zellij web and the proxy (%s). They run at login and restart if they crash.\n", m.Kind())
-	fmt.Printf("  url:  %s\n  logs: %s\n        %s\n", c.URL, logPath("web"), logPath("proxy"))
+	fmt.Printf("started (%s). It runs at login and restarts if it crashes.\n", m.Kind())
+	fmt.Printf("  url: %s\n  log: %s\n", c.URL, logPath())
+	if external {
+		fmt.Printf("note: a zellij web you started is already on 127.0.0.1:%d, so zellij-remote uses it\n"+
+			"      and won't restart it if it stops. To hand it over: zellij web --stop, then zellij-remote start.\n", c.Port)
+	}
 	lingerHint(m)
 	return nil
 }
@@ -444,10 +585,10 @@ func cmdStop() error {
 	if err != nil {
 		return err
 	}
-	if err := m.Remove([]string{"proxy", "web"}); err != nil {
+	if err := m.Remove([]string{unitName}); err != nil {
 		return err
 	}
-	fmt.Println("stopped zellij web and the proxy, and removed them from login. `zellij-remote start` brings them back.")
+	fmt.Println("stopped, and removed from login. `zellij-remote start` brings it back.")
 	return nil
 }
 
@@ -456,38 +597,39 @@ func cmdStatus() error {
 	if err != nil {
 		return err
 	}
-	c, cerr := loadConfig()
-	for _, n := range []string{"web", "proxy"} {
-		st := m.State(n)
-		label := map[string]string{"web": "zellij web", "proxy": "proxy"}[n]
-		if !st.Installed {
-			fmt.Printf("%-11s not installed (`zellij-remote start` installs it)\n", label+":")
-			continue
-		}
-		fmt.Printf("%-11s %s (pid %s)\n", label+":", st.Detail, st.PID)
+	st := m.State(unitName)
+	if st.Installed {
+		fmt.Printf("service:    %s (pid %s)\n", st.Detail, st.PID)
+	} else {
+		fmt.Println("service:    not installed (`zellij-remote start` installs it)")
 	}
+	c, cerr := loadConfig()
 	if cerr != nil {
 		fmt.Println("url:       ", cerr)
 	} else {
 		fmt.Println("url:       ", c.URL)
-		reach := "answering"
-		if !zellijUp(c.Port) {
-			reach = "not answering"
+		fmt.Println("allowed:   ", strings.Join(c.Allow, ", "))
+		web := "not answering"
+		if zellijUp(c.Port) {
+			web = "answering"
+			if _, err := os.Stat(webPIDPath()); err == nil {
+				web += ", started by zellij-remote"
+			} else {
+				web += ", started outside zellij-remote"
+			}
 		}
-		fmt.Printf("local:      http://127.0.0.1:%d (%s)\n", c.Port, reach)
+		fmt.Printf("zellij web: http://127.0.0.1:%d (%s)\n", c.Port, web)
 	}
 	lingerHint(m)
-	for _, n := range []string{"web", "proxy"} {
-		if lines := tail(logPath(n), 5); len(lines) > 0 {
-			fmt.Printf("\nlast lines of %s:\n  %s\n", logPath(n), strings.Join(lines, "\n  "))
-		}
+	if lines := tail(logPath(), 8); len(lines) > 0 {
+		fmt.Printf("\nlast lines of %s:\n  %s\n", logPath(), strings.Join(lines, "\n  "))
 	}
 	return nil
 }
 
 func lingerHint(m service.Manager) {
 	if runtime.GOOS == "linux" && m.Kind() == "systemd" && !service.Lingering() {
-		fmt.Println("note: lingering is off, so these stop when you log out. To keep them running:")
+		fmt.Println("note: lingering is off, so zellij-remote stops when you log out. To keep it running:")
 		fmt.Println("        loginctl enable-linger $USER")
 	}
 }
