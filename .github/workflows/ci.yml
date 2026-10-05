@@ -98,8 +98,35 @@ jobs:
         run: |
           set -euo pipefail
           zellij --version
+          # zellij web exits at once when no config folder exists, and a
+          # fresh runner has never run zellij in a terminal to create one.
+          # zellij-remote run does the same before starting zellij web.
+          mkdir -p "$HOME/.config/zellij"
           zellij web --port 18082 > zellij-web.log 2>&1 &
-          for _ in $(seq 1 30); do curl -fs -o /dev/null http://127.0.0.1:18082/ && break; sleep 1; done
+          web=$!
+          # Wait until it answers, or stop early if it exits.
+          ready=
+          for _ in $(seq 1 180); do
+            if curl -fs -o /dev/null http://127.0.0.1:18082/; then ready=1; break; fi
+            kill -0 "$web" 2>/dev/null || break
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::zellij web didn't answer"
+            if ! kill -0 "$web" 2>/dev/null; then
+              set +e; wait "$web"; echo "zellij web exited with status $?"; set -e
+            fi
+            echo "--- zellij web log"; cat zellij-web.log
+            echo "--- XDG_RUNTIME_DIR"; ls -ld "${XDG_RUNTIME_DIR:-/nonexistent}" 2>&1 || true
+            echo "--- zellij's own logs"
+            find /tmp "${XDG_RUNTIME_DIR:-/nonexistent}" -path '*zellij*' -name '*.log' 2>/dev/null | while read -r f; do echo "== $f"; tail -40 "$f"; done
+            echo "--- processes"; pgrep -a zellij || echo "no zellij process"
+            echo "--- listening"; ss -ltnp 2>/dev/null | grep -E '18082|zellij' || echo "nothing on 18082"
+            echo "--- curl"; curl -sv --max-time 5 http://127.0.0.1:18082/ -o /dev/null 2>&1 | tail -15 || true
+            echo "--- env"; echo "TERM=${TERM-unset} SHELL=${SHELL-unset} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR-unset} TMPDIR=${TMPDIR-unset}"
+            exit 1
+          fi
+          echo "zellij web answered after ${SECONDS}s"
           # The token lives only in this step's shell, masked from the log,
           # and is revoked afterwards.
           out=$(zellij web --create-token | grep '^token_')

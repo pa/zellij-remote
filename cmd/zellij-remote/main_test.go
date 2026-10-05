@@ -97,3 +97,30 @@ func TestOutsideZellijEnv(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+func TestEnsureZellijConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ZELLIJ_CONFIG_DIR", "")
+	t.Setenv("ZELLIJ_CONFIG_FILE", "")
+	dir, created, err := ensureZellijConfigDir()
+	want := filepath.Join(home, ".config", "zellij")
+	if err != nil || !created || dir != want {
+		t.Fatalf("first call: %q %v %v", dir, created, err)
+	}
+	if fi, err := os.Stat(want); err != nil || !fi.IsDir() {
+		t.Fatalf("not created: %v", err)
+	}
+	if _, created, _ := ensureZellijConfigDir(); created {
+		t.Fatal("second call created it again")
+	}
+
+	// A folder or file the user chose is theirs to manage.
+	t.Setenv("ZELLIJ_CONFIG_DIR", filepath.Join(home, "elsewhere"))
+	if _, created, _ := ensureZellijConfigDir(); created {
+		t.Fatal("created a folder despite ZELLIJ_CONFIG_DIR")
+	}
+	if _, err := os.Stat(filepath.Join(home, "elsewhere")); !os.IsNotExist(err) {
+		t.Fatal("touched the ZELLIJ_CONFIG_DIR folder")
+	}
+}

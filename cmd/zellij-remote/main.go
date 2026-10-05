@@ -446,6 +446,11 @@ func cmdRun() error {
 		if err != nil {
 			return errors.New("zellij isn't on PATH")
 		}
+		if dir, created, err := ensureZellijConfigDir(); err != nil {
+			log.Printf("couldn't create %s (%v); zellij web may exit at once", dir, err)
+		} else if created {
+			log.Printf("created %s: zellij web exits without a config folder, and zellij only makes one the first time it runs in a terminal", dir)
+		}
 		child := &supervise.Child{
 			Args:    []string{zj, "web", "--ip", "127.0.0.1", "--port", strconv.Itoa(c.Port)},
 			Env:     outsideZellijEnv(os.Environ()),
@@ -521,6 +526,35 @@ func outsideZellijEnv(env []string) []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// ensureZellijConfigDir makes sure zellij web finds a config folder. With
+// none of ~/.config/zellij, zellij's platform config dir or /etc/zellij
+// present, zellij web 0.45 logs "Failed to find default config file path"
+// and exits with status 0 right after saying it started. zellij itself
+// creates ~/.config/zellij the first time it runs in a terminal, so this
+// only matters on a machine where it never has; creating the same empty
+// folder changes nothing else. A folder named by ZELLIJ_CONFIG_DIR, or a
+// file named by ZELLIJ_CONFIG_FILE, is left to the user.
+func ensureZellijConfigDir() (dir string, created bool, err error) {
+	if os.Getenv("ZELLIJ_CONFIG_FILE") != "" {
+		return "", false, nil
+	}
+	if d := os.Getenv("ZELLIJ_CONFIG_DIR"); d != "" {
+		return d, false, nil
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return "", false, err
+	}
+	dir = filepath.Join(h, ".config", "zellij")
+	if _, err := os.Stat(dir); err == nil {
+		return dir, false, nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return dir, false, err
+	}
+	return dir, true, nil
 }
 
 func webPIDPath() string { return filepath.Join(home(), "zellij-web.pid") }
