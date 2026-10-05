@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/pa/zellij-remote/actions/workflows/ci.yml"><img src="https://github.com/pa/zellij-remote/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/pa/zellij-remote/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/pa/zellij-remote/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-7e9fbe" alt="macOS | Linux">
   <img src="https://img.shields.io/badge/zellij-0.43%2B-a3bd8d" alt="zellij 0.43+">
   <img src="https://img.shields.io/badge/go-1.27.1%2B-eacb8b" alt="Go 1.27.1+">
@@ -192,6 +192,50 @@ like one with production credentials loaded, out of the browser.
 
 `/` lists your shared sessions. `/<name>` attaches to a session, or creates
 it.
+
+## 🖥️ Multiple machines
+
+Every machine runs its own zellij-remote, joins the tailnet as its own
+device, and gets its own URL:
+
+```mermaid
+flowchart LR
+    P["📱 phone"] --> A["zellij-mbp.your-tailnet.ts.net<br/><sub>MacBook Pro</sub>"]
+    P --> B["zellij-air.your-tailnet.ts.net<br/><sub>MacBook Air</sub>"]
+    P --> C["zellij-devbox.your-tailnet.ts.net<br/><sub>Linux server</sub>"]
+```
+
+The tailnet setup (step 1) is done once; the grant covers every
+`tag:zellij` device. On each new machine:
+
+```bash
+# a new single-use auth key per machine (1c), and a unique --name
+zellij-remote setup --name air --allow you@example.com
+zellij-remote start
+# then share the sessions you want: Ctrl o, then s
+```
+
+| | Per machine |
+|---|---|
+| **URL** | Its own. Bookmark each one on your phone. |
+| **Login tokens** | zellij stores tokens per machine, so each needs its own (`zellij-remote token`). A leaked token opens only that machine. |
+| **Sessions** | Each URL lists only that machine's sessions. |
+| **Allowlist** | Set with `--allow` on each machine, usually the same login. |
+| **Upgrades** | Each machine sees the notice and upgrades on its own. |
+
+<details>
+<summary><b>Names, keys and removing a machine</b></summary>
+
+- **Use unique names.** A clash gets a number added by Tailscale (for example
+  `zellij-mbp-1`). It works, but it's confusing.
+- **Prefer single-use keys.** A reusable key saves a click per machine, but
+  until it expires, whoever holds it can add `tag:zellij` devices to your
+  tailnet.
+- **Removing a machine:** on that machine run `zellij-remote stop` and
+  delete `~/.zellij-remote`, then remove the device under **Machines** in
+  the admin console.
+
+</details>
 
 ## ⬆️ Upgrading
 
