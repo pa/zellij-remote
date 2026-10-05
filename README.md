@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/pa/zellij-remote/actions/workflows/ci.yml"><img src="https://github.com/pa/zellij-remote/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/pa/zellij-remote/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/pa/zellij-remote/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-7e9fbe" alt="macOS | Linux">
   <img src="https://img.shields.io/badge/zellij-0.43%2B-a3bd8d" alt="zellij 0.43+">
   <img src="https://img.shields.io/badge/go-1.27.1%2B-eacb8b" alt="Go 1.27.1+">
