@@ -1,35 +1,155 @@
 name: CI
 
+# Runs on every pull request and every push to main. Branch protection
+# should require the "ci-ok" check, which passes only when every job does.
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# A new push to a PR cancels the run still going for the previous one.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZELLIJ_VERSION: v0.45.1
+  # sha256 of zellij-x86_64-unknown-linux-musl.tar.gz for ZELLIJ_VERSION.
+  # Bump both together; a mismatch fails the integration job.
+  ZELLIJ_SHA256: 40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc
+  GOVULNCHECK_VERSION: v1.8.0
+
 jobs:
   secrets:
-    # No token, auth key or tailnet key may ever be in the history.
+    name: No secrets in history
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - run: scripts/check-secrets.sh --history
 
-  test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  lint:
+    name: Format, vet, modules
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: go vet ./...
-      - run: go test -race ./...
+      - name: go vet (linux and darwin)
+        run: |
+          GOOS=linux go vet ./...
+          GOOS=darwin go vet ./...
+      - name: go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - run: go mod verify
+      - name: shellcheck
+        run: shellcheck scripts/*.sh .githooks/*
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test -race -count=1 ./...
       - run: go build -o zellij-remote ./cmd/zellij-remote && ./zellij-remote version
+
+  integration:
+    name: Against a real zellij web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install zellij ${{ env.ZELLIJ_VERSION }} (checksum pinned)
+        run: |
+          set -euo pipefail
+          f=zellij-x86_64-unknown-linux-musl.tar.gz
+          curl -fsSL -o "$f" "https://github.com/zellij-org/zellij/releases/download/${ZELLIJ_VERSION}/$f"
+          echo "${ZELLIJ_SHA256}  $f" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$f" -C "$HOME/.local/bin" zellij
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run the proxy against zellij web
+        run: |
+          set -euo pipefail
+          zellij --version
+          zellij web --port 18082 > zellij-web.log 2>&1 &
+          for _ in $(seq 1 30); do curl -fs -o /dev/null http://127.0.0.1:18082/ && break; sleep 1; done
+          # The token lives only in this step's shell, masked from the log,
+          # and is revoked afterwards.
+          out=$(zellij web --create-token | grep '^token_')
+          echo "::add-mask::${out#*: }"
+          trap 'zellij web --revoke-token "${out%%:*}" || true' EXIT
+          ZELLIJ_IT_URL=http://127.0.0.1:18082 ZELLIJ_IT_TOKEN="${out#*: }" \
+            go test ./internal/proxy -run RealZellij -count=1 -v
+      - name: zellij web log
+        if: failure()
+        run: cat zellij-web.log || true
+
+  build:
+    name: Cross-build release targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build darwin and linux, amd64 and arm64
+        run: |
+          set -euo pipefail
+          for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath -o /dev/null ./cmd/zellij-remote
+            echo "built $t"
+          done
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@"${GOVULNCHECK_VERSION}" ./...
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [secrets, lint, test, integration, build, vuln]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        run: |
+          echo '${{ toJSON(needs) }}' | jq -e 'all(.[]; .result == "success")' > /dev/null || {
+            echo '${{ toJSON(needs) }}' | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+            exit 1
+          }

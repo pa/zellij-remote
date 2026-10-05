@@ -519,6 +519,29 @@ and CI runs it over the whole history. A test that needs a token-shaped
 string uses `00000000-0000-4000-8000-000000000000`. Never paste a real
 token into a file in the repo, even briefly.
 
+## Contributing
+
+Open a pull request against `main`. The PR template asks what you tested
+and walks through a security checklist. CI runs on every PR and every push
+to `main`:
+
+| Job | What it checks |
+|---|---|
+| No secrets in history | `scripts/check-secrets.sh --history` over every commit |
+| Format, vet, modules | gofmt, `go vet` for Linux and macOS, tidy `go.mod`, `go mod verify`, shellcheck |
+| Test | `go test -race` on Ubuntu and macOS |
+| Against a real zellij web | the proxy driving zellij 0.45.1 (checksum-pinned): login, session, Origin refusal, terminal WebSocket |
+| Cross-build | darwin and linux, amd64 and arm64 |
+| govulncheck | known vulnerabilities in code paths zellij-remote actually calls |
+| ci-ok | passes only when all of the above do; branch protection should require it |
+
+Actions are pinned to commit SHAs. Dependabot opens weekly PRs for Go
+modules and Actions, and CI tests each one.
+
+The tailnet end to end (level 3) and the background service (level 4)
+can't run in CI. Run them yourself when a PR touches those parts; the
+template says when.
+
 ## License
 
 MIT

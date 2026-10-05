@@ -1,0 +1,15 @@
+# Weekly PRs for Go modules (tailscale.com above all) and the pinned
+# GitHub Actions. Each one runs the full CI.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-modules:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
