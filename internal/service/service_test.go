@@ -58,6 +58,12 @@ func TestParseLaunchctlPrint(t *testing.T) {
 	if st.Running || st.PID != "-" {
 		t.Errorf("got %+v", st)
 	}
+	// What a crash-looping job looks like: nested "state = active" lines
+	// belong to its endpoints, not the job.
+	st = parseLaunchctlPrint("gui/501/x = {\n\tstate = spawn scheduled\n\tlast exit code = 1\n\tendpoints = {\n\t\tstate = active\n\t}\n}")
+	if st.Running || st.Detail != "spawn scheduled" || st.PID != "-" {
+		t.Errorf("got %+v", st)
+	}
 }
 
 func TestParseSystemctlShow(t *testing.T) {

@@ -213,6 +213,8 @@ func cmdSetup(args []string) error {
 		}
 	}
 	fmt.Println("\nNext: zellij-remote start     (runs at login, restarts if it crashes)")
+	fmt.Println("\nzellij shows a session in the browser only once it's shared: in the session,")
+	fmt.Println("press Ctrl o then s. (web_sharing \"on\" in your zellij config shares new ones.)")
 	return nil
 }
 
@@ -396,7 +398,10 @@ func cmdRun() error {
 	if len(c.Allow) == 0 {
 		return errors.New("nobody is allowed to connect yet; run `zellij-remote setup --allow you@example.com`")
 	}
-	release, err := lockRun()
+	// Under the service manager, wait for another zellij-remote (one run
+	// in a terminal, say) to finish rather than exit and be restarted over
+	// and over; in a terminal, say so at once.
+	release, err := lockRun(os.Getenv(serviceEnv) == "1")
 	if err != nil {
 		return err
 	}
@@ -508,23 +513,67 @@ func zellijUp(port int) bool {
 	return true
 }
 
+// serviceEnv is set in the service unit's environment, so `run` knows it
+// was started by launchd or systemd rather than in a terminal.
+const serviceEnv = "ZELLIJ_REMOTE_SERVICE"
+
+func lockFilePath() string { return filepath.Join(home(), "run.lock") }
+
 // lockRun makes sure only one zellij-remote serves at a time; two would
-// fight over the same tailnet identity and zellij web's port.
-func lockRun() (release func(), err error) {
+// fight over the same tailnet identity and zellij web's port. With wait,
+// it blocks until the other one stops; without, it fails at once.
+func lockRun(wait bool) (release func(), err error) {
 	if err := os.MkdirAll(home(), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(home(), "run.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(lockFilePath(), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, errors.New("zellij-remote is already running (check `zellij-remote status`)")
+		pid, _ := lockHolder()
+		if !wait {
+			f.Close()
+			return nil, fmt.Errorf("zellij-remote is already running (pid %d); stop that one first", pid)
+		}
+		log.Printf("another zellij-remote (pid %d) is running; waiting for it to stop", pid)
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+			f.Close()
+			return nil, err
+		}
+		log.Print("it stopped; taking over")
 	}
 	f.Truncate(0)
+	f.Seek(0, 0)
 	fmt.Fprintf(f, "%d\n", os.Getpid())
 	return func() { f.Close() }, nil
+}
+
+// lockHolder returns the pid of the zellij-remote holding the run lock, if
+// one does.
+func lockHolder() (pid int, held bool) {
+	f, err := os.OpenFile(lockFilePath(), os.O_RDONLY, 0)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	if syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) == nil {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		return 0, false
+	}
+	b, _ := io.ReadAll(f)
+	pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+	return pid, true
+}
+
+// foregroundRun returns the pid of a zellij-remote run that holds the lock
+// but isn't the service's own process: one started in a terminal.
+func foregroundRun(st service.State) (pid int, ok bool) {
+	pid, held := lockHolder()
+	if !held || pid == 0 || strconv.Itoa(pid) == st.PID {
+		return 0, false
+	}
+	return pid, true
 }
 
 // ---- start / stop / status ----
@@ -547,7 +596,7 @@ func unit() (service.Unit, error) {
 	// zellij needs to find its config, start the right shell, and speak
 	// UTF-8, plus this shell's PATH so zellij and the shells it starts
 	// find things.
-	env := [][2]string{{"ZELLIJ_REMOTE_HOME", home()}}
+	env := [][2]string{{"ZELLIJ_REMOTE_HOME", home()}, {serviceEnv, "1"}}
 	for _, k := range []string{"PATH", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "ZELLIJ_CONFIG_DIR", "ZELLIJ_CONFIG_FILE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"} {
 		if v, ok := os.LookupEnv(k); ok && v != "" {
 			env = append(env, [2]string{k, v})
@@ -570,6 +619,9 @@ func cmdStart() error {
 	m, err := service.ForOS()
 	if err != nil {
 		return err
+	}
+	if pid, ok := foregroundRun(m.State(unitName)); ok {
+		return fmt.Errorf("zellij-remote is already running in the foreground (pid %d), probably `zellij-remote run` in a terminal; stop it (Ctrl-C there, or kill %d) and run start again", pid, pid)
 	}
 	external := zellijUp(c.Port) && !m.State(unitName).Running
 	u, err := unit()
@@ -621,6 +673,13 @@ func cmdStatus() error {
 		fmt.Printf("service:    %s (pid %s)\n", st.Detail, st.PID)
 	} else {
 		fmt.Println("service:    not installed (`zellij-remote start` installs it)")
+	}
+	if pid, ok := foregroundRun(st); ok {
+		fmt.Printf("foreground: zellij-remote run, pid %d (holds the tailnet identity", pid)
+		if st.Installed {
+			fmt.Print("; the service waits until it stops")
+		}
+		fmt.Println(")")
 	}
 	c, cerr := loadConfig()
 	if cerr != nil {

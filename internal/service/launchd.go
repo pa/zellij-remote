@@ -118,16 +118,20 @@ func (l *Launchd) State(name string) State {
 	return parseLaunchctlPrint(string(out))
 }
 
+// parseLaunchctlPrint reads the job's own state and pid. Only the first
+// of each counts: nested sections (endpoints, event triggers) have "state"
+// lines of their own, like "state = active", that say nothing about the job.
 func parseLaunchctlPrint(out string) State {
 	s := State{Installed: true, PID: "-", Detail: "unknown"}
+	var gotState, gotPID bool
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, "state = "); ok {
-			s.Detail = v
+		if v, ok := strings.CutPrefix(line, "state = "); ok && !gotState {
+			s.Detail, gotState = v, true
 			s.Running = v == "running"
 		}
-		if v, ok := strings.CutPrefix(line, "pid = "); ok {
-			s.PID = v
+		if v, ok := strings.CutPrefix(line, "pid = "); ok && !gotPID {
+			s.PID, gotPID = v, true
 		}
 	}
 	return s

@@ -196,8 +196,10 @@ On your phone or another computer:
    a tagged device no longer counts as you, and the grant won't let it in.
 2. Open the URL that `setup` printed, and paste the login token.
 
-`/` shows your sessions. `/<name>` attaches to a session, or creates it if
-it doesn't exist yet.
+`/` shows your shared sessions. `/<name>` attaches to a session, or creates
+it if it doesn't exist yet. zellij shares nothing until you say so: in a
+session, press **Ctrl o** then **s** to share it, or set `web_sharing "on"`
+in your zellij config to share new sessions by default.
 
 ## Troubleshooting
 
@@ -227,7 +229,15 @@ signed in as you, untagged.
 **"Unauthorized or revoked login token".** The token was mistyped or
 revoked. Make a new one with `zellij-remote token`.
 
-**Your sessions don't show up.** zellij web sees the sessions of the user
+**Your sessions don't show up.** zellij lists a session in the web client
+only once it's shared, and by default (`web_sharing "off"`) none are.
+Inside the session, press **Ctrl o** then **s** for the Share plugin and
+turn sharing on. To share every new session by default, set
+`web_sharing "on"` in `~/.config/zellij/config.kdl`; sessions already
+running still need the Share plugin. Sharing one session at a time is the
+safer habit.
+
+If a shared session still doesn't appear, check the user: zellij web sees the sessions of the user
 it runs as, through zellij's socket directory under `$TMPDIR`. Run
 zellij-remote as the same user as your sessions. zellij-remote starts
 zellij web without the `ZELLIJ_SESSION_NAME` that a zellij pane sets;
