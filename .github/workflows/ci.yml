@@ -108,7 +108,11 @@ jobs:
           done
           if [ -z "$ready" ]; then
             echo "::error::zellij web didn't answer within 3 minutes"
-            cat zellij-web.log
+            echo "--- zellij web log"; cat zellij-web.log
+            echo "--- processes"; pgrep -a zellij || echo "no zellij process"
+            echo "--- listening"; ss -ltnp 2>/dev/null | grep -E '18082|zellij' || echo "nothing on 18082"
+            echo "--- curl"; curl -sv --max-time 5 http://127.0.0.1:18082/ -o /dev/null 2>&1 | tail -15 || true
+            echo "--- env"; echo "TERM=${TERM-unset} SHELL=${SHELL-unset} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR-unset} TMPDIR=${TMPDIR-unset}"
             exit 1
           fi
           echo "zellij web answered after ${SECONDS}s"
