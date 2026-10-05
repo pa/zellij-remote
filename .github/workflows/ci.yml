@@ -98,6 +98,10 @@ jobs:
         run: |
           set -euo pipefail
           zellij --version
+          # zellij web exits at once when no config folder exists, and a
+          # fresh runner has never run zellij in a terminal to create one.
+          # zellij-remote run does the same before starting zellij web.
+          mkdir -p "$HOME/.config/zellij"
           zellij web --port 18082 > zellij-web.log 2>&1 &
           web=$!
           # Wait until it answers, or stop early if it exits.
