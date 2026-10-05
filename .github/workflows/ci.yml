@@ -2,6 +2,9 @@ name: CI
 
 # Runs on every pull request and every push to main. Branch protection
 # should require the "ci-ok" check, which passes only when every job does.
+# When only docs change (Markdown, docs/, LICENSE, the PR template,
+# Dependabot config), the build and test jobs are skipped and ci-ok still
+# passes. The secret scan always runs.
 on:
   pull_request:
   push:
@@ -24,6 +27,44 @@ env:
   GOVULNCHECK_VERSION: v1.8.0
 
 jobs:
+  changes:
+    name: Code changed?
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # A manual run, or a push with no previous commit, runs everything.
+          range=
+          case $EVENT in
+          pull_request) range="$PR_BASE...$PR_HEAD" ;;
+          push) [ "$PUSH_BEFORE" = 0000000000000000000000000000000000000000 ] || range="$PUSH_BEFORE..$PUSH_AFTER" ;;
+          esac
+          if [ -z "$range" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Anything not on this list counts as code.
+          code=$(git diff --name-only "$range" | grep -Ev '\.md$|^docs/|^LICENSE$|^\.github/pull_request_template\.md$|^\.github/dependabot\.yml$' || true)
+          if [ -n "$code" ]; then
+            echo "Code changed:"; echo "$code"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only docs changed; skipping build and tests."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   secrets:
     name: No secrets in history
     runs-on: ubuntu-latest
@@ -35,6 +76,8 @@ jobs:
       - run: scripts/check-secrets.sh --history
 
   lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Format, vet, modules
     runs-on: ubuntu-latest
     steps:
@@ -59,6 +102,8 @@ jobs:
         run: shellcheck scripts/*.sh .githooks/*
 
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -76,6 +121,8 @@ jobs:
       - run: go build -o zellij-remote ./cmd/zellij-remote && ./zellij-remote version
 
   integration:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Against a real zellij web
     runs-on: ubuntu-latest
     steps:
@@ -139,6 +186,8 @@ jobs:
         run: cat zellij-web.log || true
 
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Cross-build release targets
     runs-on: ubuntu-latest
     steps:
@@ -157,6 +206,8 @@ jobs:
           done
 
   vuln:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
@@ -171,12 +222,16 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [secrets, lint, test, integration, build, vuln]
+    needs: [changes, secrets, lint, test, integration, build, vuln]
     runs-on: ubuntu-latest
     steps:
-      - name: Every job passed
+      - name: Every job passed, or was skipped because only docs changed
+        env:
+          CODE: ${{ needs.changes.outputs.code }}
         run: |
-          echo '${{ toJSON(needs) }}' | jq -e 'all(.[]; .result == "success")' > /dev/null || {
+          ok='.result == "success"'
+          if [ "$CODE" = false ]; then ok='.result == "success" or .result == "skipped"'; fi
+          echo '${{ toJSON(needs) }}' | jq -e "(.changes.result == \"success\") and all(.[]; $ok)" > /dev/null || {
             echo '${{ toJSON(needs) }}' | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
             exit 1
           }
