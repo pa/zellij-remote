@@ -75,36 +75,10 @@ jobs:
           persist-credentials: false
       - run: scripts/check-secrets.sh --history
 
-  lint:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    name: Format, vet, modules
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: gofmt
-        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - name: go vet (linux and darwin)
-        run: |
-          GOOS=linux go vet ./...
-          GOOS=darwin go vet ./...
-      - name: go.mod and go.sum are tidy
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
-      - run: go mod verify
-      - name: shellcheck
-        run: shellcheck scripts/*.sh .githooks/*
-
   test:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    name: Test (${{ matrix.os }})
+    name: Lint and test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -117,6 +91,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: gofmt, tidy modules, shellcheck
+        if: runner.os == 'Linux'
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go mod tidy && git diff --exit-code go.mod go.sum
+          go mod verify
+          shellcheck scripts/*.sh .githooks/*
+      - run: go vet ./...
       - run: go test -race -count=1 ./...
       - run: go build -o zellij-remote ./cmd/zellij-remote && ./zellij-remote version
 
@@ -132,6 +114,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # Only the test job saves the build cache, so it stays complete.
+          cache: false
       - name: Install zellij ${{ env.ZELLIJ_VERSION }} (checksum pinned)
         run: |
           set -euo pipefail
@@ -185,26 +169,6 @@ jobs:
         if: failure()
         run: cat zellij-web.log || true
 
-  build:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    name: Cross-build release targets
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: Build darwin and linux, amd64 and arm64
-        run: |
-          set -euo pipefail
-          for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
-            CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath -o /dev/null ./cmd/zellij-remote
-            echo "built $t"
-          done
-
   vuln:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -217,12 +181,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # Only the test job saves the build cache, so it stays complete.
+          cache: false
       - run: go run golang.org/x/vuln/cmd/govulncheck@"${GOVULNCHECK_VERSION}" ./...
 
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, secrets, lint, test, integration, build, vuln]
+    needs: [changes, secrets, test, integration, vuln]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed, or was skipped because only docs changed

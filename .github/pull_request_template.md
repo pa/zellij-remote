@@ -13,7 +13,7 @@
 ## Testing
 
 CI runs gofmt, vet, `go test -race` on Linux and macOS, a real zellij web
-through the proxy, cross-builds, govulncheck, and a secret scan of the
+through the proxy, govulncheck, and a secret scan of the
 whole history. Tick what you ran beyond that:
 
 - [ ] `go test -race ./...` locally
