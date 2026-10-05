@@ -223,12 +223,21 @@ of the browser.
 
 ## 4. Open it
 
+Every device you open zellij from needs the Tailscale app. The
+`*.ts.net` address resolves and connects only through Tailscale; with the
+app off, the page doesn't load at all. (The machine running zellij-remote
+is the exception: zellij-remote has Tailscale built in.)
+
 On your phone or another computer:
 
-1. Install the Tailscale app and sign in to the same tailnet **as
-   yourself**. Don't use the auth key from 1c, and don't tag the device:
-   a tagged device no longer counts as you, and the grant won't let it in.
-2. Open the URL that `setup` printed, and paste the login token.
+1. Install Tailscale: [iPhone/iPad](https://apps.apple.com/app/tailscale/id1470499037),
+   [Android](https://play.google.com/store/apps/details?id=com.tailscale.ipn),
+   or [macOS, Windows, Linux](https://tailscale.com/download).
+2. Sign in to the same tailnet **as yourself**, with the login you put in
+   `--allow`, and turn it on. Don't use the auth key from 1c, and don't tag
+   the device: a tagged device no longer counts as you, and the grant won't
+   let it in.
+3. Open the URL that `setup` printed, and paste the login token.
 
 `/` lists your shared sessions; pick one to attach. `/<name>` attaches to
 a session, or creates it if it doesn't exist yet.
