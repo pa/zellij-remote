@@ -93,6 +93,14 @@ func (s *Systemd) Remove(names []string) error {
 	return systemctl("daemon-reload")
 }
 
+func (s *Systemd) Runs(name, path string) bool {
+	b, err := os.ReadFile(s.Path(name))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(b), "\nExecStart="+systemdQuote(path)+" ")
+}
+
 func (s *Systemd) Restart(name string) error { return systemctl("restart", unitName(name)) }
 
 func (s *Systemd) State(name string) State {

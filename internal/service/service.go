@@ -36,6 +36,8 @@ type Manager interface {
 	Remove(names []string) error
 	// Restart stops and starts an installed unit, so it runs a new binary.
 	Restart(name string) error
+	// Runs reports whether the installed unit starts the program at path.
+	Runs(name, path string) bool
 	State(name string) State
 	// Path is where the unit's definition file lives.
 	Path(name string) string
