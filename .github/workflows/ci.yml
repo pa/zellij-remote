@@ -99,7 +99,19 @@ jobs:
           set -euo pipefail
           zellij --version
           zellij web --port 18082 > zellij-web.log 2>&1 &
-          for _ in $(seq 1 30); do curl -fs -o /dev/null http://127.0.0.1:18082/ && break; sleep 1; done
+          # On a fresh machine zellij compiles its built-in plugins on first
+          # start, which can take minutes on a runner; wait until it answers.
+          ready=
+          for _ in $(seq 1 180); do
+            if curl -fs -o /dev/null http://127.0.0.1:18082/; then ready=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::zellij web didn't answer within 3 minutes"
+            cat zellij-web.log
+            exit 1
+          fi
+          echo "zellij web answered after ${SECONDS}s"
           # The token lives only in this step's shell, masked from the log,
           # and is revoked afterwards.
           out=$(zellij web --create-token | grep '^token_')
