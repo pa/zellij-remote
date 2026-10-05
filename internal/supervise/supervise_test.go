@@ -100,3 +100,21 @@ func TestStopStale(t *testing.T) {
 		t.Fatal("stale child still running")
 	}
 }
+
+func TestChildEnv(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "env")
+	c := &Child{Args: []string{"/bin/sh", "-c", "echo \"$FOO|$BAR\" > " + out + "; sleep 60"}, Env: []string{"FOO=yes"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	var b []byte
+	for i := 0; i < 100 && len(b) == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+		b, _ = os.ReadFile(out)
+	}
+	cancel()
+	<-done
+	if strings.TrimSpace(string(b)) != "yes|" {
+		t.Fatalf("child saw %q, want only the given env", b)
+	}
+}

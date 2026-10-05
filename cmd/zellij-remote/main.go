@@ -422,6 +422,7 @@ func cmdRun() error {
 		}
 		child := &supervise.Child{
 			Args:    []string{zj, "web", "--ip", "127.0.0.1", "--port", strconv.Itoa(c.Port)},
+			Env:     outsideZellijEnv(os.Environ()),
 			Stdout:  os.Stdout,
 			Stderr:  os.Stderr,
 			PIDFile: webPIDPath(),
@@ -476,6 +477,22 @@ func cmdRun() error {
 	}
 	log.Print("stopped")
 	return nil
+}
+
+// outsideZellijEnv drops the variables zellij sets inside its own panes.
+// Started from a pane (say, `zellij-remote run` typed in one), zellij web
+// would inherit ZELLIJ_SESSION_NAME, take that session for its "current"
+// one, and leave it out of the web client's session list.
+func outsideZellijEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "ZELLIJ" || k == "ZELLIJ_SESSION_NAME" || k == "ZELLIJ_PANE_ID" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 func webPIDPath() string { return filepath.Join(home(), "zellij-web.pid") }

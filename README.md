@@ -199,6 +199,41 @@ On your phone or another computer:
 `/` shows your sessions. `/<name>` attaches to a session, or creates it if
 it doesn't exist yet.
 
+## Troubleshooting
+
+**The URL times out.** Check these, in order:
+
+1. `zellij-remote status` must show it running. `setup` only joins the
+   tailnet; nothing serves the URL until `start` (or `run`).
+2. The Tailscale app on your device must be on and signed in to the
+   same tailnet.
+3. The device must be tagged `tag:zellij` under **Machines**. zellij-remote
+   requests the tag itself and refuses to run without it, but the request
+   only succeeds if `tagOwners` lists the tag (1b). If the device shows no
+   tag, fix `tagOwners` or add the tag by hand (**…** > **Edit ACL tags**),
+   then run `zellij-remote start` again.
+4. The grant in 1b: `src` must be your login exactly as **Users** shows
+   it, `dst` must be `tag:zellij`, and `ip` must be `tcp:443`.
+
+When a request reaches the machine, the log says so (`zellij-remote
+status` shows the last lines). If the log shows nothing, the request never
+arrived, so the problem is in 2–4.
+
+**403 Forbidden.** The log says why. `isn't on the allowlist` means your
+device is signed in to Tailscale as someone not on `--allow`. `tagged
+devices aren't allowed` means your phone or laptop has a tag; it must be
+signed in as you, untagged.
+
+**"Unauthorized or revoked login token".** The token was mistyped or
+revoked. Make a new one with `zellij-remote token`.
+
+**Your sessions don't show up.** zellij web sees the sessions of the user
+it runs as, through zellij's socket directory under `$TMPDIR`. Run
+zellij-remote as the same user as your sessions. zellij-remote starts
+zellij web without the `ZELLIJ_SESSION_NAME` that a zellij pane sets;
+inherited, it would make zellij treat that session as "current" and hide
+it.
+
 ## Security
 
 ### What's encrypted

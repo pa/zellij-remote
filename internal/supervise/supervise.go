@@ -17,6 +17,7 @@ import (
 // Child is a program to keep running until the context ends.
 type Child struct {
 	Args    []string // program path first
+	Env     []string // the child's environment; nil inherits ours
 	Stdout  io.Writer
 	Stderr  io.Writer
 	PIDFile string // records the running child, so a later run can clean up after a crash
@@ -76,6 +77,7 @@ func (c *Child) Run(ctx context.Context) {
 
 func (c *Child) once(ctx context.Context) error {
 	cmd := exec.Command(c.Args[0], c.Args[1:]...)
+	cmd.Env = c.Env
 	cmd.Stdout, cmd.Stderr = c.Stdout, c.Stderr
 	// Its own process group: a Ctrl-C at the terminal reaches only us, and
 	// we stop the child (and anything it started) ourselves.

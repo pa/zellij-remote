@@ -89,3 +89,11 @@ func TestParseToken(t *testing.T) {
 		t.Error("parsed a token out of an error")
 	}
 }
+
+func TestOutsideZellijEnv(t *testing.T) {
+	got := outsideZellijEnv([]string{"PATH=/bin", "ZELLIJ=0", "ZELLIJ_SESSION_NAME=main", "ZELLIJ_PANE_ID=3", "ZELLIJ_CONFIG_DIR=/c", "HOME=/h"})
+	want := []string{"PATH=/bin", "ZELLIJ_CONFIG_DIR=/c", "HOME=/h"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

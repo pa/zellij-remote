@@ -76,8 +76,12 @@ func (t *Tailscale) start(ctx context.Context) (*tsnet.Server, []string, error) 
 	}
 	s := &tsnet.Server{
 		Dir: t.Dir, Hostname: t.Hostname, AuthKey: t.AuthKey,
-		UserLogf: logf,
-		Logf:     func(string, ...any) {}, // the backend's debug logging
+		// Ask for the tag ourselves, so the device gets it even when the
+		// auth key was made without one: the ACL grant names tag:zellij,
+		// and an untagged device would just time out for everyone.
+		AdvertiseTags: []string{Tag},
+		UserLogf:      logf,
+		Logf:          func(string, ...any) {}, // the backend's debug logging
 	}
 	upCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -88,12 +92,39 @@ func (t *Tailscale) start(ctx context.Context) (*tsnet.Server, []string, error) 
 		}
 		return nil, nil, err
 	}
+	if err := checkTagged(ctx, s); err != nil {
+		s.Close()
+		return nil, nil, err
+	}
 	domains := s.CertDomains()
 	if len(domains) == 0 {
 		s.Close()
 		return nil, nil, errors.New("the tailnet has no HTTPS certificates; turn on MagicDNS and HTTPS Certificates in the Tailscale admin console (DNS page)")
 	}
 	return s, domains, nil
+}
+
+// checkTagged makes sure the device carries Tag. Without it the ACL grant
+// doesn't match the device, and the URL times out with no hint as to why.
+func checkTagged(ctx context.Context, s *tsnet.Server) error {
+	lc, err := s.LocalClient()
+	if err != nil {
+		return err
+	}
+	st, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return err
+	}
+	if st.Self != nil && st.Self.Tags != nil {
+		for _, tag := range st.Self.Tags.All() {
+			if strings.EqualFold(tag, Tag) {
+				return nil
+			}
+		}
+	}
+	return errors.New("joined, but the device isn't tagged " + Tag + ", so the ACL grant won't let anyone reach it. " +
+		"Check that tagOwners in the policy file lists " + Tag + ", then either make the auth key with that tag, " +
+		"or add the tag to the device under Machines (... > Edit ACL tags) and run this again")
 }
 
 // Listen joins the tailnet and opens an HTTPS listener on :443 with the
