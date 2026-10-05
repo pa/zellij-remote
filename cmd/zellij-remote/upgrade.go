@@ -147,8 +147,14 @@ func cmdUpgrade(args []string) error {
 		return err
 	}
 	// A running background service keeps the old binary until it restarts.
+	// Only restart it if it runs this binary: upgrading some other copy of
+	// zellij-remote mustn't interrupt it.
 	m, err := service.ForOS()
 	if err != nil || !m.State(unitName).Installed {
+		return nil
+	}
+	if !m.Runs(unitName, exe) {
+		fmt.Println("the background service runs a different zellij-remote binary, so it was left alone.")
 		return nil
 	}
 	if err := m.Restart(unitName); err != nil {

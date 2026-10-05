@@ -110,6 +110,15 @@ func (l *Launchd) Remove(names []string) error {
 	return nil
 }
 
+func (l *Launchd) Runs(name, path string) bool {
+	b, err := os.ReadFile(l.Path(name))
+	if err != nil {
+		return false
+	}
+	// The program is ProgramArguments' first string, right after <array>.
+	return bytes.Contains(b, []byte("<array><string>"+xmlEscape(path)+"</string>"))
+}
+
 func (l *Launchd) Restart(name string) error {
 	out, err := exec.Command("launchctl", "kickstart", "-k", launchdDomain()+"/"+LabelPrefix+name).CombinedOutput()
 	if err != nil {
