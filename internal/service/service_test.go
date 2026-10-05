@@ -1,6 +1,7 @@
 package service
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -74,5 +75,31 @@ func TestParseSystemctlShow(t *testing.T) {
 	st = parseSystemctlShow("ActiveState=failed\nSubState=failed\nMainPID=0\n")
 	if st.Running || st.PID != "-" || st.Detail != "failed (failed)" {
 		t.Errorf("got %+v", st)
+	}
+}
+
+func TestRuns(t *testing.T) {
+	dir := t.TempDir()
+	u := Unit{Name: "zellij-remote", Desc: "x", Args: []string{"/opt/my tools/zellij-remote", "run"}, Log: "/l"}
+
+	l := &Launchd{Dir: dir}
+	b, _ := Plist(u)
+	os.WriteFile(l.Path(u.Name), b, 0o644)
+	if !l.Runs(u.Name, "/opt/my tools/zellij-remote") {
+		t.Error("launchd: doesn't recognize its own program")
+	}
+	for _, other := range []string{"/opt/my tools/zellij", "/tmp/zellij-remote", "/opt/my tools/zellij-remote-old"} {
+		if l.Runs(u.Name, other) {
+			t.Errorf("launchd: claims to run %q", other)
+		}
+	}
+
+	s := &Systemd{Dir: dir}
+	os.WriteFile(s.Path(u.Name), SystemdUnit(u), 0o644)
+	if !s.Runs(u.Name, "/opt/my tools/zellij-remote") {
+		t.Error("systemd: doesn't recognize its own program")
+	}
+	if s.Runs(u.Name, "/tmp/zellij-remote") || s.Runs("missing", "/opt/my tools/zellij-remote") {
+		t.Error("systemd: claims to run another program")
 	}
 }
