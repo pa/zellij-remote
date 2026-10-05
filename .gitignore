@@ -33,3 +33,6 @@ cookiejar*
 .vscode/
 *.swp
 *.tmp
+
+# Local browser tooling output
+.playwright-mcp/
