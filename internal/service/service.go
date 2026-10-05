@@ -34,6 +34,8 @@ type Manager interface {
 	Kind() string // "launchd" or "systemd"
 	Install(units []Unit) error
 	Remove(names []string) error
+	// Restart stops and starts an installed unit, so it runs a new binary.
+	Restart(name string) error
 	State(name string) State
 	// Path is where the unit's definition file lives.
 	Path(name string) string

@@ -93,6 +93,8 @@ func (s *Systemd) Remove(names []string) error {
 	return systemctl("daemon-reload")
 }
 
+func (s *Systemd) Restart(name string) error { return systemctl("restart", unitName(name)) }
+
 func (s *Systemd) State(name string) State {
 	if _, err := os.Stat(s.Path(name)); err != nil {
 		return State{PID: "-", Detail: "not installed"}

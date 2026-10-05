@@ -110,6 +110,14 @@ func (l *Launchd) Remove(names []string) error {
 	return nil
 }
 
+func (l *Launchd) Restart(name string) error {
+	out, err := exec.Command("launchctl", "kickstart", "-k", launchdDomain()+"/"+LabelPrefix+name).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launchctl kickstart: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func (l *Launchd) State(name string) State {
 	out, err := exec.Command("launchctl", "print", launchdDomain()+"/"+LabelPrefix+name).CombinedOutput()
 	if err != nil {

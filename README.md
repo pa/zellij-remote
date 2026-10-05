@@ -138,6 +138,7 @@ zellij-remote start
 | `zellij-remote stop` | Stop it, and remove it from login |
 | `zellij-remote token` | Another login token |
 | `zellij-remote token --read-only` | A token that can only watch |
+| `zellij-remote upgrade` | Install the latest release (see Upgrading below) |
 | `zellij-remote run` | Run in the foreground instead, under your own supervisor |
 
 <details>
@@ -191,6 +192,37 @@ like one with production credentials loaded, out of the browser.
 
 `/` lists your shared sessions. `/<name>` attaches to a session, or creates
 it.
+
+## ⬆️ Upgrading
+
+When a newer release is out, any `zellij-remote` command ends with:
+
+```
+zellij-remote v1.2.0 is available (this is v1.1.0). Run `zellij-remote upgrade`.
+```
+
+| Command | What it does |
+|---|---|
+| `zellij-remote upgrade` | Downloads the release for your OS and CPU, checks its SHA-256 against the release's `checksums.txt`, swaps the binary in one atomic rename, and restarts the background service |
+| `zellij-remote upgrade --check` | Only says whether there's a newer release |
+
+<details>
+<summary><b>How the check works</b></summary>
+
+- **Once a day at most.** A command asks GitHub only if the last answer is
+  over a day old, and gives up after 2 seconds. The running service also
+  checks daily and writes the notice to its log. Failed checks back off
+  for a day too.
+- **Anonymous.** Requests carry no GitHub credentials.
+- **Never installs by itself.** Nothing changes until you run `upgrade`.
+- **Built from source?** Development builds are never notified, and
+  `upgrade` replaces one only with `--force`.
+- **Turn it off** with `ZELLIJ_REMOTE_NO_UPDATE_CHECK=1`.
+- **What the checksum proves:** the download arrived intact. It comes from
+  the same release as the binary, so it doesn't vouch for the release
+  itself.
+
+</details>
 
 ## 📱 On your phone
 

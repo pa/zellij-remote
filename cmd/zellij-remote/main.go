@@ -6,6 +6,7 @@
 //	zellij-remote start | stop | status             run in the background (launchd on
 //	                                                macOS, systemd --user on Linux)
 //	zellij-remote token [--read-only]               make another login token
+//	zellij-remote upgrade [--check]                 install the latest release
 //
 // It embeds tsnet, joins the tailnet as its own device (zellij-<name>,
 // tagged tag:zellij), listens on :443 with the device's *.ts.net
@@ -58,6 +59,7 @@ usage:
   zellij-remote start | stop | status            run in the background (at login,
                                                  restarted on crash)
   zellij-remote token [--read-only]              make another login token
+  zellij-remote upgrade [--check]                install the latest release from GitHub
   zellij-remote version
 
 Setup reads the Tailscale auth key from TS_AUTHKEY, or asks for it.
@@ -84,6 +86,8 @@ func main() {
 		err = cmdStatus()
 	case "token":
 		err = cmdToken(args)
+	case "upgrade":
+		err = cmdUpgrade(args)
 	case "version", "--version", "-v":
 		fmt.Println("zellij-remote", version)
 	case "help", "--help", "-h":
@@ -94,6 +98,15 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "zellij-remote:", err)
+	}
+	// Every command but these ends by saying when a newer release is out.
+	// run has its own daily check, logged; upgrade just said it.
+	switch os.Args[1] {
+	case "run", "upgrade", "help", "--help", "-h":
+	default:
+		noticeAfterCommand()
+	}
+	if err != nil {
 		os.Exit(1)
 	}
 }
@@ -482,6 +495,8 @@ func cmdRun() error {
 		srv.Shutdown(sctx)
 	}()
 	log.Printf("serving %s -> %s, for %s", u, target, strings.Join(c.Allow, ", "))
+	log.Printf("zellij-remote %s", version)
+	go checkForUpdates(ctx)
 	err = srv.Serve(ln)
 	stop()
 	<-webDone
