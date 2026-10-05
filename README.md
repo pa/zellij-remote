@@ -57,6 +57,8 @@ Or download a binary for your platform from
 [Releases](https://github.com/pa/zellij-remote/releases), unpack it, and put
 `zellij-remote` on your `PATH`.
 
+Or [build it from source](#build-from-source).
+
 ## 1. Prepare the tailnet (once)
 
 `zellij-remote setup` walks you through these steps in the terminal, so you
@@ -99,6 +101,17 @@ switch to the JSON editor, and add these next to your existing entries:
 
 - Put your own Tailscale login in `src`. A zellij login is a shell on the
   machine, so grant it to yourself only, not to `autogroup:member`.
+  It's not a URL: it's the account you sign in to Tailscale with. Copy
+  it exactly from **Users**
+  ([console.tailscale.com/admin/users](https://console.tailscale.com/admin/users)):
+
+  | You sign in with | Your login |
+  |---|---|
+  | Google, Microsoft, Okta, email | your email, `you@yourdomain.com` |
+  | GitHub | `<github-username>@github` |
+  | Passkey | `<name>@passkey` |
+
+  The same login goes into `zellij-remote setup --allow`.
 - A new tailnet's default policy lets every device reach every other on
   every port. While that allow-all rule is there, the grant above changes
   nothing. To actually restrict access, replace the allow-all rule with
@@ -142,8 +155,9 @@ That's all. `setup`:
    hash of it, and zellij-remote doesn't keep it at all. Put it in your
    password manager, then clear your terminal's scrollback.
 
-`--allow` takes your Tailscale login (comma-separate several). Only those
-people's own devices get through. Without it, setup asks.
+`--allow` takes your Tailscale login, the same one as `src` in 1b
+(comma-separate several). Only those people's own devices get through.
+Without it, setup asks.
 
 `start` installs one background service that runs at login and restarts on
 a crash. It starts `zellij web` on 127.0.0.1 itself. If you already run a
@@ -268,30 +282,160 @@ No tokens or keys are stored anywhere in it.
 
 `ZELLIJ_REMOTE_HOME` moves `~/.zellij-remote` elsewhere.
 
-## Development
+## Build from source
+
+You need Go 1.27.1 or newer (`go version`) and git. Linux builds need no C
+toolchain.
 
 ```bash
-git config core.hooksPath .githooks   # once: scan every commit for secrets
-go test ./...
+git clone https://github.com/pa/zellij-remote.git
+cd zellij-remote
+git config core.hooksPath .githooks       # scan every commit for secrets (see below)
+
+go build -o bin/zellij-remote ./cmd/zellij-remote
+./bin/zellij-remote version               # zellij-remote dev
 ```
 
-`scripts/check-secrets.sh` refuses commits that contain anything shaped
-like a Tailscale key, a zellij token or session cookie, or a private key.
-CI runs it over the whole history. A test that needs a token-shaped string
-uses `00000000-0000-4000-8000-000000000000`.
+To put it on your `PATH` (in `$(go env GOPATH)/bin`):
 
-One test drives a real zellij web through the proxy: it logs in, opens a
-session, checks that a cross-origin WebSocket is refused, and reads
-terminal output over the WebSocket. It runs only when you point it at a
-zellij web and give it a token:
+```bash
+go install ./cmd/zellij-remote
+```
+
+A release-style build, stamped with a version:
+
+```bash
+go build -trimpath -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty)" \
+  -o bin/zellij-remote ./cmd/zellij-remote
+```
+
+To build for another machine, for example a Linux server, set `GOOS` and
+`GOARCH`. The four release targets are darwin/arm64, darwin/amd64,
+linux/amd64 and linux/arm64.
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/zellij-remote-linux-arm64 ./cmd/zellij-remote
+```
+
+`zellij-remote start` refuses to run from `go run`, because that binary is
+deleted when `go run` exits. The service records the binary's path, so
+after rebuilding the same path, run `zellij-remote start` again to pick up
+the new build.
+
+## Local testing
+
+There are four levels. Each builds on the one before, and only the third
+needs a Tailscale auth key.
+
+### 1. Unit tests (seconds, nothing else needed)
+
+```bash
+gofmt -l .                 # prints nothing when formatting is clean
+go vet ./...
+GOOS=linux go vet ./...    # the Linux code paths, from a Mac
+go test -race ./...
+scripts/check-secrets.sh --history
+```
+
+These cover the proxy (forwarding, WebSocket passthrough, the Origin and
+allowlist checks, the `Secure` cookie, HSTS), the launchd and systemd unit
+files, the zellij web supervisor (restart, clean stop, stale-process
+cleanup), the allowlist, token parsing and config. CI runs the same on
+Linux and macOS.
+
+### 2. Against a real zellij, without Tailscale (a minute)
+
+This test drives a real `zellij web` through the proxy over TLS, the way a
+browser would. It logs in with a token, opens a session, checks that a
+cross-origin WebSocket is refused, and reads terminal output over the
+WebSocket. It uses a throwaway zellij web on port 18082 and a token that
+stays in a shell variable, never on screen or in your shell history.
 
 ```bash
 zellij web --port 18082 &
-zellij web --create-token        # note the token's name, revoke it after
-ZELLIJ_IT_URL=http://127.0.0.1:18082 ZELLIJ_IT_TOKEN=<token> \
-  go test ./internal/proxy -run RealZellij -v
-zellij web --revoke-token <name>
+out=$(zellij web --create-token | grep '^token_')
+ZELLIJ_IT_URL=http://127.0.0.1:18082 ZELLIJ_IT_TOKEN="${out#*: }" \
+  go test ./internal/proxy -run RealZellij -count=1 -v
+zellij web --revoke-token "${out%%:*}"; unset out
+zellij delete-session --force zellij-remote-it
+kill %1
 ```
+
+Without `ZELLIJ_IT_URL` and `ZELLIJ_IT_TOKEN`, `go test` skips it.
+
+### 3. End to end on your tailnet, sandboxed
+
+This runs a second, throwaway zellij-remote in the foreground. It has its
+own state directory, device name and port, so it leaves a real install
+alone. Prepare the tailnet first (step 1 above). Each sandbox needs a new
+single-use auth key.
+
+```bash
+export ZELLIJ_REMOTE_HOME=$(mktemp -d)    # all state goes here, not ~/.zellij-remote
+./bin/zellij-remote setup --name dev-test --port 18083 --allow you@example.com
+./bin/zellij-remote run                   # logs to the terminal; Ctrl-C stops it and its zellij web
+```
+
+`setup` prints the URL (`https://zellij-dev-test.<tailnet>.ts.net`) and a
+login token. Then, from your phone or another tailnet device:
+
+- [ ] The URL loads over HTTPS, and the login page appears.
+- [ ] The token logs in. Typing in a session echoes back (the WebSocket
+      works through the proxy).
+- [ ] `/<new-name>` creates a session; `zellij list-sessions` shows it.
+- [ ] The terminal running `run` logs `login attempt by …` and
+      `terminal opened by …` with your login.
+- [ ] A cross-origin request is refused:
+      `curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: https://evil.example' https://zellij-dev-test.<tailnet>.ts.net/`
+      prints 403.
+- [ ] A login that isn't on `--allow` gets a 403, and `run` logs
+      `refused … isn't on the allowlist`. To try it, run setup again with
+      `--allow someone-else@example.com`, restart `run`, and reload.
+- [ ] Only 443 answers: `nc -vz zellij-dev-test.<tailnet>.ts.net 22` fails.
+
+To clean up:
+
+```bash
+zellij web --list-tokens && zellij web --revoke-token <name>   # the token setup printed
+rm -rf "$ZELLIJ_REMOTE_HOME"; unset ZELLIJ_REMOTE_HOME
+```
+
+Then remove `zellij-dev-test` under **Machines** in the admin console.
+
+### 4. The background service
+
+There's only one service per user (`com.github.pa.zellij-remote` or
+`zellij-remote.service`), and `start` replaces whatever is installed. So
+test this with your real setup, not a sandbox.
+
+```bash
+go install ./cmd/zellij-remote
+zellij-remote start
+zellij-remote status          # service running, zellij web "started by zellij-remote"
+pkill -f 'zellij web --ip 127.0.0.1'; sleep 3; zellij-remote status    # zellij web is back
+pkill -f 'zellij-remote run';         sleep 15; zellij-remote status   # the service is back, new pid
+zellij-remote stop && zellij-remote status                             # not installed
+```
+
+- **macOS:** `launchctl print gui/$(id -u)/com.github.pa.zellij-remote`
+  shows what launchd thinks.
+- **Linux:** `systemctl --user status zellij-remote` and
+  `journalctl --user -u zellij-remote` (the log itself is in
+  `~/.zellij-remote/zellij-remote.log`).
+- **A Linux VM from a Mac:** [Lima](https://lima-vm.io),
+  [OrbStack](https://orbstack.dev) and
+  [Multipass](https://multipass.run) all run systemd. Cross-compile as
+  above, copy the binary in, install zellij there, and run levels 3 and 4.
+  Containers usually lack a systemd user instance, so use a VM.
+
+### Secrets
+
+`scripts/check-secrets.sh` refuses commits that contain anything shaped
+like a Tailscale key, a zellij token or session cookie, or a private key.
+It runs as the pre-commit hook (`git config core.hooksPath .githooks`),
+and CI runs it over the whole history. A test that needs a token-shaped
+string uses `00000000-0000-4000-8000-000000000000`. Never paste a real
+token into a file in the repo, even briefly.
 
 ## License
 

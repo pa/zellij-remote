@@ -172,7 +172,7 @@ func cmdSetup(args []string) error {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return errors.New("say who may connect: --allow you@example.com (your Tailscale login)")
 		}
-		fmt.Print("Your Tailscale login (who may connect; comma-separate several): ")
+		fmt.Print("Your Tailscale login, as the admin console's Users page shows it\n(you@yourdomain.com, <github-user>@github; comma-separate several): ")
 		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
 			return err
@@ -358,8 +358,10 @@ Add these next to what's already there, then select Save:
       { "src": ["you@example.com"], "dst": ["` + tunnel.Tag + `"], "ip": ["tcp:443"] }
     ]
 
-Put your own Tailscale login in "src". A zellij login is a shell on this
-machine, so keep the grant to yourself. If the file already has a "grants"
+Put your own Tailscale login in "src": not a URL, but the account you sign
+in with, exactly as https://console.tailscale.com/admin/users shows it
+(you@yourdomain.com, <github-user>@github, <name>@passkey). A zellij login
+is a shell on this machine, so keep the grant to yourself. If the file already has a "grants"
 or "tagOwners" section, add the entries inside it rather than a second one.`},
 		{"Create the auth key", `Open https://console.tailscale.com/admin/settings/keys and select
 Generate auth key, with:
