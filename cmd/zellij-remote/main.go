@@ -212,9 +212,17 @@ func cmdSetup(args []string) error {
 			fmt.Printf("couldn't create a login token (%v); run `zellij-remote token` to try again\n", err)
 		}
 	}
-	fmt.Println("\nNext: zellij-remote start     (runs at login, restarts if it crashes)")
-	fmt.Println("\nzellij shows a session in the browser only once it's shared: in the session,")
-	fmt.Println("press Ctrl o then s. (web_sharing \"on\" in your zellij config shares new ones.)")
+	fmt.Printf(`
+Next:
+  1. zellij-remote start
+     Runs it in the background: at login, and restarted if it crashes.
+  2. Share the sessions you want in the browser. zellij shares none by default.
+     In each session press Ctrl o, then s, and turn sharing on.
+     (web_sharing "on" in ~/.config/zellij/config.kdl shares new sessions automatically.)
+  3. On a phone or laptop signed in to your tailnet as yourself, open
+     %s
+     and log in with the token above.
+`, u)
 	return nil
 }
 

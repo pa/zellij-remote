@@ -187,7 +187,41 @@ loginctl enable-linger $USER
 To run it under a supervisor of your own instead, use `zellij-remote run`,
 which does the same in the foreground.
 
-## 3. Open it
+## 3. Share your sessions
+
+zellij lists a session in the web client only after that session is
+shared, and by default (`web_sharing "off"`) none are. Without this step
+you can log in, but your sessions won't show up.
+
+**Share one session.** Do this in each session you want in the browser:
+
+1. In the session, press **Ctrl o** to enter Session mode.
+2. Press **s** to open the **Share** plugin, a floating pane.
+3. Turn sharing on for this session, then close the pane.
+
+To stop sharing, open the Share plugin again and turn it off.
+
+**Share new sessions automatically.** Set this in
+`~/.config/zellij/config.kdl`:
+
+```kdl
+web_sharing "on"
+```
+
+New sessions are shared from the start. Sessions that are already running
+keep their setting, so share those with the Share plugin, or restart them.
+
+| `web_sharing` | Effect |
+|---|---|
+| `"off"` (default) | Nothing is shared until a session opts in with the Share plugin |
+| `"on"` | Every new session is shared |
+| `"disabled"` | Nothing can be shared, and the Share plugin can't change that |
+
+Sharing one session at a time is the safer habit. It keeps a session you
+didn't mean to expose, like one with production credentials loaded, out
+of the browser.
+
+## 4. Open it
 
 On your phone or another computer:
 
@@ -196,10 +230,8 @@ On your phone or another computer:
    a tagged device no longer counts as you, and the grant won't let it in.
 2. Open the URL that `setup` printed, and paste the login token.
 
-`/` shows your shared sessions. `/<name>` attaches to a session, or creates
-it if it doesn't exist yet. zellij shares nothing until you say so: in a
-session, press **Ctrl o** then **s** to share it, or set `web_sharing "on"`
-in your zellij config to share new sessions by default.
+`/` lists your shared sessions; pick one to attach. `/<name>` attaches to
+a session, or creates it if it doesn't exist yet.
 
 ## Troubleshooting
 
@@ -229,13 +261,8 @@ signed in as you, untagged.
 **"Unauthorized or revoked login token".** The token was mistyped or
 revoked. Make a new one with `zellij-remote token`.
 
-**Your sessions don't show up.** zellij lists a session in the web client
-only once it's shared, and by default (`web_sharing "off"`) none are.
-Inside the session, press **Ctrl o** then **s** for the Share plugin and
-turn sharing on. To share every new session by default, set
-`web_sharing "on"` in `~/.config/zellij/config.kdl`; sessions already
-running still need the Share plugin. Sharing one session at a time is the
-safer habit.
+**Your sessions don't show up.** Share them first (step 3): **Ctrl o**,
+then **s**, in each session. zellij shares none by default.
 
 If a shared session still doesn't appear, check the user: zellij web sees the sessions of the user
 it runs as, through zellij's socket directory under `$TMPDIR`. Run
@@ -422,7 +449,8 @@ export ZELLIJ_REMOTE_HOME=$(mktemp -d)    # all state goes here, not ~/.zellij-r
 ```
 
 `setup` prints the URL (`https://zellij-dev-test.<tailnet>.ts.net`) and a
-login token. Then, from your phone or another tailnet device:
+login token. Share a session (step 3). Then, from your phone or another tailnet
+device:
 
 - [ ] The URL loads over HTTPS, and the login page appears.
 - [ ] The token logs in. Typing in a session echoes back (the WebSocket
