@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  Open your <a href="https://zellij.dev">zellij</a> sessions from your phone or laptop, over <a href="https://tailscale.com">Tailscale</a>.<br>
+  Open your <a href="https://zellij.dev">zellij</a> sessions remotely, from your phone or another laptop, over <a href="https://tailscale.com">Tailscale</a>.<br>
   One binary, one port, only you.
 </p>
 
