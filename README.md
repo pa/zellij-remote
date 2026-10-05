@@ -554,10 +554,9 @@ through a security checklist. **CI runs on every PR:**
 | Check | What it covers |
 |---|---|
 | 🔍 Secrets | Every commit in the history is scanned |
-| 🧹 Lint | gofmt, vet (Linux and macOS), tidy modules, shellcheck |
+| 🧹 Lint | gofmt, tidy modules, shellcheck; vet on Ubuntu and macOS |
 | 🧪 Tests | `go test -race` on Ubuntu and macOS |
 | 🖥️ Real zellij | The proxy against zellij 0.45.1 (checksum-pinned) |
-| 📦 Builds | darwin and linux × amd64 and arm64 |
 | 🛡️ govulncheck | Known vulnerabilities in code it calls |
 | ✅ `ci-ok` | Passes only if everything above does |
 
