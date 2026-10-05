@@ -45,7 +45,7 @@ and passes HTTPS through to zellij's
 ## Quick start
 
 ```bash
-go install github.com/pa/zellij-remote/cmd/zellij-remote@latest   # or a binary from Releases
+curl -fsSL https://raw.githubusercontent.com/pa/zellij-remote/main/scripts/install.sh | sh
 zellij-remote setup --name mac --allow you@example.com             # join the tailnet, get a login token
 zellij-remote start                                                # run in the background
 # in each zellij session you want in the browser: Ctrl o, then s → share
@@ -54,6 +54,25 @@ zellij-remote start                                                # run in the 
 Then open `https://zellij-mac.<tailnet>.ts.net` on your phone, with the
 Tailscale app on, and paste the token. First time? Prepare the tailnet once
 (step 1).
+
+<details>
+<summary><b>What the install script does</b></summary>
+
+[`scripts/install.sh`](scripts/install.sh) downloads the latest release for
+your OS and CPU (macOS or Linux, amd64 or arm64), checks its SHA-256
+against the release's `checksums.txt`, and puts the binary in
+`~/.local/bin`. It needs no `sudo` and no Go. If that folder isn't on your
+`PATH`, it tells you what to add.
+
+| Variable | Default | Use |
+|---|---|---|
+| `ZELLIJ_REMOTE_VERSION` | latest | Install a specific release, e.g. `v0.1.0` |
+| `ZELLIJ_REMOTE_INSTALL_DIR` | `~/.local/bin` | Install somewhere else |
+
+Later versions install with `zellij-remote upgrade`. Prefer to build it
+yourself? See **Build from source** below.
+
+</details>
 
 ---
 
@@ -541,6 +560,9 @@ through a security checklist. **CI runs on every PR:**
 | 📦 Builds | darwin and linux × amd64 and arm64 |
 | 🛡️ govulncheck | Known vulnerabilities in code it calls |
 | ✅ `ci-ok` | Passes only if everything above does |
+
+If a PR only touches docs (Markdown, `docs/`, `LICENSE`, the PR template,
+Dependabot config), only the secret scan runs and `ci-ok` still passes.
 
 Actions are pinned to commit SHAs, and Dependabot proposes updates weekly.
 Levels 3 and 4 can't run in CI; the PR template says when to run them.
