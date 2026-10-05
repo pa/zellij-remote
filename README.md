@@ -193,6 +193,50 @@ like one with production credentials loaded, out of the browser.
 `/` lists your shared sessions. `/<name>` attaches to a session, or creates
 it.
 
+## 🖥️ Multiple machines
+
+Every machine runs its own zellij-remote, joins the tailnet as its own
+device, and gets its own URL:
+
+```mermaid
+flowchart LR
+    P["📱 phone"] --> A["zellij-mbp.your-tailnet.ts.net<br/><sub>MacBook Pro</sub>"]
+    P --> B["zellij-air.your-tailnet.ts.net<br/><sub>MacBook Air</sub>"]
+    P --> C["zellij-devbox.your-tailnet.ts.net<br/><sub>Linux server</sub>"]
+```
+
+The tailnet setup (step 1) is done once; the grant covers every
+`tag:zellij` device. On each new machine:
+
+```bash
+# a new single-use auth key per machine (1c), and a unique --name
+zellij-remote setup --name air --allow you@example.com
+zellij-remote start
+# then share the sessions you want: Ctrl o, then s
+```
+
+| | Per machine |
+|---|---|
+| **URL** | Its own. Bookmark each one on your phone. |
+| **Login tokens** | zellij stores tokens per machine, so each needs its own (`zellij-remote token`). A leaked token opens only that machine. |
+| **Sessions** | Each URL lists only that machine's sessions. |
+| **Allowlist** | Set with `--allow` on each machine, usually the same login. |
+| **Upgrades** | Each machine sees the notice and upgrades on its own. |
+
+<details>
+<summary><b>Names, keys and removing a machine</b></summary>
+
+- **Use unique names.** A clash gets a number added by Tailscale (for example
+  `zellij-mbp-1`). It works, but it's confusing.
+- **Prefer single-use keys.** A reusable key saves a click per machine, but
+  until it expires, whoever holds it can add `tag:zellij` devices to your
+  tailnet.
+- **Removing a machine:** on that machine run `zellij-remote stop` and
+  delete `~/.zellij-remote`, then remove the device under **Machines** in
+  the admin console.
+
+</details>
+
 ## ⬆️ Upgrading
 
 When a newer release is out, any `zellij-remote` command ends with:
